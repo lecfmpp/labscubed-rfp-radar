@@ -219,25 +219,22 @@ def render_blocks(rows, stats, today):
             "text": f":warning:  *{len(soon)} with a deadline inside 14 days* — decide bid/no-bid this week."}})
     blocks.append({"type": "divider"})
 
-    shown = live[:15]   # Block Kit tops out at 50 blocks; the rest is in the portal
+    # One compact row per tender: title on top, the columns on a second line, and
+    # the clickable "Open" button on the SAME row (Block Kit accessory, right side).
+    # A monospace table can't carry a link per row — this is how each Notice gets
+    # its own clickable link without dropping them all below the grid.
+    shown = live[:20]   # Block Kit tops out at 50 blocks; the rest is in the portal
     for i, r in enumerate(shown, 1):
-        title = clean_title(r.get("title"))[:140]
+        title = clean_title(r.get("title"))[:150]
         link  = portal_link(r['id']) or (r.get("url") or "")
-        sec = {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*{i}. {title}*"},
-            "fields": [
-                {"type": "mrkdwn", "text": f"*Fit*\n{float(r.get('score') or 0):.0f}  ·  {r.get('tier') or '—'}"},
-                {"type": "mrkdwn", "text": f"*Deadline*\n{deadline_cell(r)}"},
-                {"type": "mrkdwn", "text": f"*Buyer*\n{(r.get('buyer') or '—')[:60]}"},
-                {"type": "mrkdwn", "text": f"*Country*\n{r.get('buyer_country') or '—'}"},
-            ],
-        }
+        meta = (f"`{float(r.get('score') or 0):.0f} · {r.get('tier') or '—'}`   "
+                f":round_pushpin: {r.get('buyer_country') or '—'}   "
+                f":calendar: {deadline_cell(r)}")
+        sec = {"type": "section", "text": {"type": "mrkdwn", "text": f"*{i}. {title}*\n{meta}"}}
         if link:
             sec["accessory"] = {"type": "button", "text": {"type": "plain_text", "text": "Open ↗", "emoji": True},
                                 "url": link, "action_id": f"open_{i}"}
         blocks.append(sec)
-        blocks.append({"type": "divider"})
 
     if not shown:
         blocks.append({"type": "section", "text": {"type": "mrkdwn",
@@ -279,19 +276,22 @@ def main(date=None, fmt="table"):
     # Never invent a row: no batch today means the scan did not run — say so
     # instead of posting a zeroed digest that looks like a real quiet day.
     if batch:
-        # A bot/webhook cannot render a real Slack table, so post the aligned
-        # monospace grid (a true rows×columns table) with clickable portal links
-        # listed under it — the closest thing to a table an unattended post can do.
-        msg = render(rows, stats, today, "code")
+        # Block Kit rows: each tender is its own row with the clickable "Open"
+        # button on the same line (a monospace code block can't carry a link per
+        # row). `fallback`/`msg` is the plain-text version for the notification
+        # and for the stdout / connector path.
+        blocks = render_blocks(rows, stats, today)
+        msg = f":satellite_antenna: New RFP Batch — {today}: {live_n} tenders"
     else:
+        blocks = None
         msg = (f":satellite_antenna: _RFP Radar — {today}_\n"
                "_No batch recorded for today — the 06:00 UTC scan may not have run. "
                "Check `lecfmpp/labscubed-rfp-radar` → Actions → RFP Radar._")
-    if post_slack(msg):
+    if post_slack(msg, blocks):
         log_run("success" if batch else "partial", live_n,
                 "posted digest" if batch else "no batch for today")
     else:
-        print(msg)   # no Slack creds: print so a connector/human can post it
+        print(render(rows, stats, today, "code") if batch else msg)  # local: print the text table
 
 
 if __name__ == "__main__":
