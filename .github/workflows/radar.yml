@@ -47,4 +47,8 @@ jobs:
           SLACK_WEBHOOK_URL:    ${{ secrets.SLACK_WEBHOOK_URL }}
           SLACK_BOT_TOKEN:      ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL:        C0BUL9KGD52
-        run: python3 scripts/slack_digest.py --format code
+        run: |
+          # Booleans only - never echo the secret itself.
+          echo "SLACK_WEBHOOK_URL present: ${{ secrets.SLACK_WEBHOOK_URL != '' }}"
+          echo "SLACK_BOT_TOKEN present:   ${{ secrets.SLACK_BOT_TOKEN != '' }}"
+          python3 scripts/slack_digest.py --format code

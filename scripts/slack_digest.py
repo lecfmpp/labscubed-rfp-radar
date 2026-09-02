@@ -187,8 +187,17 @@ def main(date=None, fmt="table"):
     if post_slack(msg):
         log_run("success" if batch else "partial", live_n,
                 "posted digest" if batch else "no batch for today")
+        print(f"[slack] posted ({live_n} notices)", file=sys.stderr)
     else:
-        print(msg)   # no Slack creds: print so a connector/human can post it
+        # Printing is the intended fallback for the connector/human path, but in
+        # an unattended run it means the digest silently never reached anyone.
+        # Say so loudly: a scheduled job that quietly does nothing is the worst
+        # failure mode, because it looks exactly like a quiet day.
+        print("[slack] NOT POSTED - neither SLACK_WEBHOOK_URL nor SLACK_BOT_TOKEN "
+              "is set in this environment. If this is the scheduled job, the secret "
+              "is missing or misnamed (check Settings > Secrets and variables > "
+              "Actions > Secrets, not Variables).", file=sys.stderr)
+        print(msg)
 
 
 if __name__ == "__main__":
