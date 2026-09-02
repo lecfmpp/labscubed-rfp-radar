@@ -24,7 +24,7 @@ def rest(method, path, payload=None, prefer=None):
         body = r.read()
         return json.loads(body) if body else []
 
-def to_row(r, batch):
+def to_row(r):
     dq, why = disqualify(r.get("title", ""), r.get("description", "") or r.get("why", ""))
     return {
         "source": r["source"], "notice_id": str(r["id"]),
@@ -42,7 +42,6 @@ def to_row(r, batch):
         "score": r["score"], "tier": r["tier"], "why_matched": r.get("why"),
         "found_by": r.get("found_by", "cpv"),
         "disqualified": dq, "disqualification_reason": why,
-        "batch_date": batch,
         "document_url": r.get("document_url"),
         "document_language": r.get("document_language") or [],
         "document_restricted": r.get("document_restricted"),
@@ -54,6 +53,11 @@ def to_row(r, batch):
         "contact_email": r.get("contact_email"),
         "validity_value": int(r["validity_value"]) if str(r.get("validity_value") or "").isdigit() else None,
         "validity_unit": r.get("validity_unit"),
+        # batch_date is deliberately NOT sent. The column defaults to current_date,
+        # so a new row is stamped today while an existing row keeps the date it was
+        # first seen. Sending it would rewrite the stamp on every upsert and the
+        # digest - which selects batch_date = current_date - would re-announce the
+        # same tenders every single day.
     }
 
 def known_ids(rows):
@@ -67,7 +71,7 @@ def known_ids(rows):
 def main(path):
     rows_in = json.load(open(path))
     batch = datetime.date.today().isoformat()
-    rows = [to_row(r, batch) for r in rows_in]
+    rows = [to_row(r) for r in rows_in]
     started = datetime.datetime.now(datetime.timezone.utc).isoformat()
     seen = known_ids(rows)
     fresh = [r for r in rows if (r["source"], r["notice_id"]) not in seen]
