@@ -27,6 +27,7 @@ Post the RFP Radar digest to #rfp-agent (channel C0BUL9KGD52).
 1. Run: python3 scripts/slack_digest.py
    in the labscubed-rfp-radar repo, with SUPABASE_URL and SUPABASE_SERVICE_KEY set.
    It prints a ready-to-send markdown message and talks to nothing.
+   Use --format code if the markdown table ever stops rendering as a table.
 2. Post that output verbatim to #rfp-agent with slack_send_message.
    Do not rewrite, summarise or reorder it — the formatting is deliberate and
    matches the BDR Agent digest.
@@ -55,3 +56,14 @@ Country (`buyer_country`), Score (`score`), Deadline (`deadline` — append ⚠�
 `deadline_is_proxy` is true), Left (days from today), Link (`PORTAL_BASE_URL`/rfp/`id`,
 falling back to `url`). Exclude rows where `disqualified` is true from the table and
 report their count in the footer instead.
+
+## A note on the table
+
+`slack_send_message` converts a markdown table into a real Slack table.
+`slack_send_message_draft` does **not** — its documented markdown support covers
+bold, italic, code, blockquotes, lists, links and code blocks, but not tables. So a
+draft shows raw pipes while the sent message renders correctly. Do not "fix" the
+formatting based on how a draft looks.
+
+If the table ever fails on a real send, `--format code` emits a fixed-width code
+block that renders identically everywhere, with the links listed underneath.

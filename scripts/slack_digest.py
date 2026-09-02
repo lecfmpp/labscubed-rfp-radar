@@ -6,7 +6,13 @@ This script does NOT talk to Slack. Posting is done by the Claude routine throug
 the Slack connector (same path as the BDR Agent: the message appears as the user,
 "Sent using @Claude"), so no bot, no app and no token are needed anywhere.
 
-   python3 scripts/slack_digest.py [--date 2026-09-02]
+   python3 scripts/slack_digest.py [--date 2026-09-02] [--format table|code]
+
+--format table (default) uses a markdown table, which slack_send_message converts
+into a real Slack table. NOTE: the draft composer does NOT convert tables, so a
+draft will show raw pipes even though the sent message renders correctly.
+--format code emits a fixed-width code block instead: renders identically
+everywhere, including drafts, at the cost of not being clickable.
 
 Reads Supabase directly so the routine can post even if the scan ran hours earlier.
 Env: SUPABASE_URL, SUPABASE_SERVICE_KEY, PORTAL_BASE_URL (optional)
@@ -40,7 +46,7 @@ def esc(t):
     return (t or "").replace("|", "\\|").replace("\n", " ").strip()
 
 
-def render(rows, stats, today):
+def render(rows, stats, today, fmt="table"):
     hot  = [r for r in rows if r["tier"] == "HOT"]
     warm = [r for r in rows if r["tier"] == "WARM"]
     dq   = [r for r in rows if r.get("disqualified")]
@@ -64,10 +70,32 @@ def render(rows, stats, today):
         out += [f":warning: _{len(soon)} with a deadline inside 14 days — "
                 f"decide bid/no-bid this week._", ""]
 
-    if live:
+    shown = live[:MAX_ROWS]
+    if shown and fmt == "code":
+        # Fixed-width block: renders the same everywhere, drafts included.
+        w = (3, 52, 30, 5, 6, 12, 6)
+        head = ("#", "Notice", "Buyer", "Ctry", "Score", "Deadline", "Left")
+        lines = ["  ".join(h.ljust(x) for h, x in zip(head, w)).rstrip(),
+                 "  ".join("-" * x for x in w)]
+        for i, r in enumerate(shown, 1):
+            flag = "*" if r.get("deadline_is_proxy") and r.get("deadline") else ""
+            lines.append("  ".join([
+                str(i).ljust(w[0]), esc(r.get("title"))[:w[1]].ljust(w[1]),
+                (esc(r.get("buyer")) or "-")[:w[2]].ljust(w[2]),
+                (r.get("buyer_country") or "-").ljust(w[3]),
+                f"{float(r.get('score') or 0):.0f}".ljust(w[4]),
+                ((r.get("deadline") or "-")[:10] + flag).ljust(w[5]),
+                days_left(r.get("deadline"), today).ljust(w[6]),
+            ]).rstrip())
+        out += ["```", *lines, "```", ""]
+        for i, r in enumerate(shown, 1):
+            link = f"{PORTAL}/rfp/{r['id']}" if PORTAL else (r.get("url") or "")
+            if link: out.append(f"{i}. <{link}|{esc(r.get('title'))[:60]}>")
+        out.append("")
+    elif shown:
         out += ["| # | Notice | Buyer | Country | Score | Deadline | Left | Link |",
                 "|---|---|---|---|---|---|---|---|"]
-        for i, r in enumerate(live[:MAX_ROWS], 1):
+        for i, r in enumerate(shown, 1):
             link = f"{PORTAL}/rfp/{r['id']}" if PORTAL else (r.get("url") or "")
             cell = f"[open]({link})" if link else "—"
             flag = " ⚠️" if r.get("deadline_is_proxy") and r.get("deadline") else ""
@@ -77,9 +105,10 @@ def render(rows, stats, today):
                 f"| {(r.get('deadline') or '—')[:10]}{flag} "
                 f"| {days_left(r.get('deadline'), today)} | {cell} |")
         out.append("")
-        if any(r.get("deadline_is_proxy") and r.get("deadline") for r in live[:MAX_ROWS]):
-            out += ["_⚠️ = deadline is a proxy (public opening date); confirm on the notice "
-                    "page before planning._", ""]
+        if any(r.get("deadline_is_proxy") and r.get("deadline") for r in shown):
+            mark = "*" if fmt == "code" else "⚠️"
+            out += [f"_{mark} = deadline is a proxy (public opening date); confirm on the "
+                    "notice page before planning._", ""]
     else:
         out += ["_No new opportunities within the criteria in this window._", ""]
 
@@ -92,7 +121,7 @@ def render(rows, stats, today):
     return "\n".join(out)
 
 
-def main(date=None):
+def main(date=None, fmt="table"):
     today = datetime.date.fromisoformat(date) if date else datetime.date.today()
     q = urllib.parse.urlencode({
         "select": "*", "batch_date": f"eq.{today.isoformat()}",
@@ -101,9 +130,10 @@ def main(date=None):
     stats = {}
     p = f"data/stats_{today.isoformat()}.json"
     if os.path.exists(p): stats = json.load(open(p))
-    print(render(rows, stats, today))
+    print(render(rows, stats, today, fmt))
 
 
 if __name__ == "__main__":
     d = sys.argv[sys.argv.index("--date") + 1] if "--date" in sys.argv else None
-    main(d)
+    f = sys.argv[sys.argv.index("--format") + 1] if "--format" in sys.argv else "table"
+    main(d, f)
