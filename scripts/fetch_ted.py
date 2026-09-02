@@ -12,7 +12,14 @@ API = "https://api.ted.europa.eu/v3/notices/search"
 FIELDS = ["publication-number", "notice-title", "buyer-name", "publication-date",
           "deadline-receipt-tender-date-lot", "classification-cpv",
           "place-of-performance-country-lot", "notice-type",
-          "total-value", "links", "description-lot"]
+          "total-value", "links", "description-lot",
+          # Everything needed to actually bid: where the documents are, what
+          # language the PROPOSAL must be in, when questions close, who to ask.
+          "document-url-lot", "document-official-language-lot",
+          "document-restricted-lot", "submission-language", "submission-url-lot",
+          "electronic-submission-lot", "deadline-receipt-tender-time-lot",
+          "deadline-receipt-answers-date-lot", "organisation-email-addinfo-lot",
+          "tender-validity-deadline-value-lot", "tender-validity-deadline-unit-lot"]
 
 def q(days=7):
     cpvs = " ".join(sorted(CPV_CORE | (CPV_BROAD - {"48000000", "73000000", "42000000"})))
@@ -46,6 +53,11 @@ def q_fulltext(days=7):
     NOTE: TED's FT~ searches the TITLE (translated to EN), not the description."""
     terms = " OR ".join(f'FT~("{t}")' for t in FT_TERMS)
     return f"({terms}) AND publication-date >= today(-{days})"
+
+def first(v):
+    """TED returns most lot-scoped fields as a list, one entry per lot."""
+    if isinstance(v, list): return v[0] if v else None
+    return v or None
 
 def flat(v):
     """TED returns multilingual dicts {'eng':[...], 'deu':[...]}."""
@@ -87,6 +99,17 @@ def run(days=7, countries=None):
                 "country": ctry, "cpv": sorted(set(n.get("classification-cpv") or [])),
                 "url": f"https://ted.europa.eu/en/notice/-/detail/{pub}",
                 "xml": f"https://ted.europa.eu/en/notice/{pub}/xml",
+                "document_url": first(n.get("document-url-lot")),
+                "document_language": n.get("document-official-language-lot") or [],
+                "document_restricted": first(n.get("document-restricted-lot")),
+                "submission_language": n.get("submission-language") or [],
+                "submission_url": first(n.get("submission-url-lot")),
+                "electronic_submission": first(n.get("electronic-submission-lot")),
+                "deadline_time": first(n.get("deadline-receipt-tender-time-lot")),
+                "questions_deadline": (first(n.get("deadline-receipt-answers-date-lot")) or "")[:10] or None,
+                "contact_email": first(n.get("organisation-email-addinfo-lot")),
+                "validity_value": first(n.get("tender-validity-deadline-value-lot")),
+                "validity_unit": first(n.get("tender-validity-deadline-unit-lot")),
             })
         if len(batch) < 100: break
         page += 1

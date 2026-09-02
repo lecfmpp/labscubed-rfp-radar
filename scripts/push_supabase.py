@@ -43,6 +43,17 @@ def to_row(r, batch):
         "found_by": r.get("found_by", "cpv"),
         "disqualified": dq, "disqualification_reason": why,
         "batch_date": batch,
+        "document_url": r.get("document_url"),
+        "document_language": r.get("document_language") or [],
+        "document_restricted": r.get("document_restricted"),
+        "submission_language": r.get("submission_language") or [],
+        "submission_url": r.get("submission_url"),
+        "electronic_submission": r.get("electronic_submission"),
+        "deadline_time": r.get("deadline_time"),
+        "questions_deadline": r.get("questions_deadline"),
+        "contact_email": r.get("contact_email"),
+        "validity_value": int(r["validity_value"]) if str(r.get("validity_value") or "").isdigit() else None,
+        "validity_unit": r.get("validity_unit"),
     }
 
 def known_ids(rows):
