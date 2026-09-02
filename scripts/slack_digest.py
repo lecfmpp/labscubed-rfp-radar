@@ -100,7 +100,7 @@ def render(rows, stats, today, fmt="table"):
         for i, r in enumerate(shown, 1):
             flag = "*" if r.get("deadline_is_proxy") and r.get("deadline") else ""
             lines.append("  ".join([
-                str(i).ljust(w[0]), esc(r.get("title"))[:w[1]].ljust(w[1]),
+                str(i).ljust(w[0]), esc(clean_title(r.get("title")))[:w[1]].ljust(w[1]),
                 (esc(r.get("buyer")) or "-")[:w[2]].ljust(w[2]),
                 (r.get("buyer_country") or "-").ljust(w[3]),
                 f"{float(r.get('score') or 0):.0f}".ljust(w[4]),
@@ -110,7 +110,7 @@ def render(rows, stats, today, fmt="table"):
         out += ["```", *lines, "```", ""]
         for i, r in enumerate(shown, 1):
             link = f"{PORTAL}/rfp/{r['id']}" if PORTAL else (r.get("url") or "")
-            if link: out.append(f"{i}. <{link}|{esc(r.get('title'))[:60]}>")
+            if link: out.append(f"{i}. <{link}|{esc(clean_title(r.get('title')))[:60]}>")
         out.append("")
     elif shown:
         out += ["| # | Notice | Buyer | Country | Score | Deadline | Left | Link |",
@@ -268,16 +268,15 @@ def main(date=None, fmt="table"):
     # Never invent a row: no batch today means the scan did not run — say so
     # instead of posting a zeroed digest that looks like a real quiet day.
     if batch:
-        msg = render(rows, stats, today, fmt)          # text (connector / stdout)
-        blocks = render_blocks(rows, stats, today)     # Block Kit (bot / webhook)
-        fallback = f":satellite_antenna: New RFP Batch — {today}: {live_n} tenders"
+        # A bot/webhook cannot render a real Slack table, so post the aligned
+        # monospace grid (a true rows×columns table) with clickable portal links
+        # listed under it — the closest thing to a table an unattended post can do.
+        msg = render(rows, stats, today, "code")
     else:
         msg = (f":satellite_antenna: _RFP Radar — {today}_\n"
                "_No batch recorded for today — the 06:00 UTC scan may not have run. "
                "Check `lecfmpp/labscubed-rfp-radar` → Actions → RFP Radar._")
-        blocks = None
-        fallback = msg
-    if post_slack(fallback if blocks else msg, blocks):
+    if post_slack(msg):
         log_run("success" if batch else "partial", live_n,
                 "posted digest" if batch else "no batch for today")
     else:
