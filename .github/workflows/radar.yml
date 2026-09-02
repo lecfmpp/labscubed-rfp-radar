@@ -27,10 +27,24 @@ jobs:
       - name: Scan sources (Germany + TED/EU)
         run: python3 scripts/radar.py --days "${{ inputs.days || '3' }}"
 
-      # Upsert into `rfps`. Slack is NOT posted from here: the Claude routine
-      # posts through the Slack connector, so no bot or token is ever needed.
+      # Upsert into `rfps`. With no Slack secret set, the digest step below only
+      # prints and a Claude routine posts instead - both paths stay supported.
       - name: Write to Supabase
         env:
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python3 scripts/push_supabase.py "data/radar_$(date -u +%F).json"
+
+      # Posts the digest itself, in the same job, right after the rows land -
+      # so the data is guaranteed to be there and no second schedule is needed.
+      # if: always() means a failed scan still gets reported in the channel.
+      - name: Post RFP digest to Slack
+        if: always()
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PORTAL_BASE_URL:      ${{ vars.PORTAL_BASE_URL || 'https://portal.labscubed.ca/#/sales' }}
+          SLACK_WEBHOOK_URL:    ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_BOT_TOKEN:      ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL:        C0BUL9KGD52
+        run: python3 scripts/slack_digest.py --format code
