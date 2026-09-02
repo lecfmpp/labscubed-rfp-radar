@@ -7,11 +7,7 @@ POSTS the digest to #rfp-agent itself — this is how the GitHub Actions run
 publishes, with no local machine. With neither set it just prints to stdout, so
 a Claude connector or a human can post the same message (the original path).
 
-   python3 scripts/slack_digest.py [--date 2026-09-02] [--format blocks|table|code]
-
---format blocks (used by GitHub Actions) sends a native Slack table block:
-a real table with clickable cells, and no duplicate link list underneath.
-Falls back to the code block automatically if Slack refuses the blocks.
+   python3 scripts/slack_digest.py [--date 2026-09-02] [--format table|code]
 
 --format table (default) uses a markdown table, which the Slack CONNECTOR renders
 as a real table. A bot/webhook post does NOT render markdown tables, so the
@@ -24,7 +20,7 @@ any machine, hours after the scan, with no shared filesystem.
 Env: SUPABASE_URL, SUPABASE_SERVICE_KEY, PORTAL_BASE_URL (optional),
      SLACK_WEBHOOK_URL or SLACK_BOT_TOKEN (+ SLACK_CHANNEL, default #rfp-agent)
 """
-import json, os, sys, datetime, urllib.parse, urllib.request
+import json, os, sys, re, datetime, urllib.parse, urllib.request
 
 URL    = os.environ["SUPABASE_URL"].rstrip("/")
 KEY    = os.environ["SUPABASE_SERVICE_KEY"]
@@ -51,6 +47,23 @@ def days_left(deadline, today):
 def esc(t):
     """Escape only literal pipes; the structural ones build the table."""
     return (t or "").replace("|", "\\|").replace("\n", " ").strip()
+
+
+def clean_title(raw):
+    """Pull the real subject out of a long OJEU/TED title (country – CPV category
+    – ref codes – procedure – SUBJECT), mirroring the portal's parseTitle, so the
+    Slack card headlines the thing being bought rather than the whole string."""
+    t = (raw or "").strip()
+    m = re.search(r'(?:for the (?:supply|provision|purchase|delivery|procurement) of'
+                  r'|procedure for the (?:supply|provision) of|supply of|provision of'
+                  r'|purchase of|procurement of|delivery of|contract for|tender for'
+                  r'|framework (?:agreement )?for)\s+(.+)$', t, re.I)
+    if m and len(m.group(1).strip()) > 8:
+        s = re.sub(r'^the\s+', '', m.group(1).strip(), flags=re.I)
+    else:
+        parts = re.split(r'\s+[\u2013\u2014]\s+', t)   # en / em dash
+        s = parts[-1].strip() if len(parts) > 1 and len(parts[-1].strip()) > 12 else t
+    return (s[:1].upper() + s[1:]) if s else t
 
 
 def render(rows, stats, today, fmt="table"):
@@ -128,121 +141,104 @@ def render(rows, stats, today, fmt="table"):
     return "\n".join(out)
 
 
-def cell(t):
-    return {"type": "raw_text", "text": str(t)[:180]}
-
-
-def link_cell(url, label):
-    return {"type": "rich_text", "elements": [{"type": "rich_text_section",
-            "elements": [{"type": "link", "url": url, "text": label}]}]}
-
-
-def build_blocks(rows, stats, today):
-    """Native Slack table block: a real table, with clickable cells.
-    Supported by chat.postMessage and by incoming webhooks; max 100 rows x 20
-    columns. post_slack falls back to the code-block text if Slack refuses it."""
-    hot  = [r for r in rows if r["tier"] == "HOT"]
-    warm = [r for r in rows if r["tier"] == "WARM"]
-    dq   = [r for r in rows if r.get("disqualified")]
-    live = [r for r in rows if not r.get("disqualified")]
-    avg  = (sum(float(r["score"]) for r in rows) / len(rows)) if rows else 0
-    soon = [r for r in live if r.get("deadline")
-            and 0 <= (datetime.date.fromisoformat(r["deadline"][:10]) - today).days <= 14]
-
-    def sect(t): return {"type": "section", "text": {"type": "mrkdwn", "text": t}}
-
-    blocks = [sect(
-        f":satellite_antenna: *New RFP Batch — {today}*\n"
-        f"RFPs saved: *{len(rows)}*  ·  HOT (≥60): *{len(hot)}*  ·  WARM: *{len(warm)}*  ·  "
-        f"Disqualified: *{len(dq)}*  ·  Avg score: *{avg:.1f}*  ·  Window: {stats.get('days', 3)} days"),
-        {"type": "context", "elements": [{"type": "mrkdwn", "text":
-            f"Scanned {stats.get('scanned', 0):,} notices "
-            f"(DE Datenservice {stats.get('scanned_de', 0):,} + TED/EU {stats.get('scanned_ted', 0):,})  ·  "
-            f"CPV matched: {stats.get('by_cpv', 0)}  ·  full-text only: {stats.get('by_fulltext', 0)}"}]}]
-    if soon:
-        blocks.append(sect(f":warning: *{len(soon)}* with a deadline inside 14 days — "
-                           "decide bid/no-bid this week."))
-    if live:
-        head = ["#", "Notice", "Buyer", "Country", "Score", "Deadline", "Left"]
-        trs = [[cell(h) for h in head]]
-        for i, r in enumerate(live[:MAX_ROWS], 1):
-            url = f"{PORTAL}/rfp/{r['id']}" if PORTAL else (r.get("url") or "")
-            flag = " (proxy)" if r.get("deadline_is_proxy") and r.get("deadline") else ""
-            title = (r.get("title") or "")[:70]
-            trs.append([
-                cell(i),
-                link_cell(url, title) if url else cell(title),
-                cell((r.get("buyer") or "-")[:38]),
-                cell(r.get("buyer_country") or "-"),
-                cell(f"{float(r.get('score') or 0):.0f}"),
-                cell((r.get("deadline") or "-")[:10] + flag),
-                cell(days_left(r.get("deadline"), today)),
-            ])
-        blocks.append({"type": "table", "rows": trs})
-        if any(r.get("deadline_is_proxy") and r.get("deadline") for r in live[:MAX_ROWS]):
-            blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text":
-                "(proxy) = public opening date, not the confirmed submission deadline — "
-                "verify on the notice page before planning."}]})
-    else:
-        blocks.append(sect("_No new opportunities within the criteria in this window._"))
-
-    foot = "full batch in Supabase `rfps`  ·  :satellite_antenna: RFP Radar"
-    if dq:
-        foot = (f"{len(dq)} disqualified by the technical screen "
-                f"({(dq[0].get('disqualification_reason') or '')[:60]})  ·  ") + foot
-    if len(live) > MAX_ROWS:
-        foot = f"showing {MAX_ROWS} of {len(live)}  ·  " + foot
-    blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": foot}]})
-    return blocks
-
-
 def post_slack(text, blocks=None):
-    """Post `text` to Slack when running unattended (GitHub Actions).
+    """Post to Slack when running unattended (GitHub Actions). Sends Block Kit
+    `blocks` (rich cards) when given, with `text` as the notification fallback.
     Prefers a bot token (chat.postMessage), else an incoming webhook. Returns
     True if a post was attempted. With neither set, the caller prints instead —
     so a human/Claude connector can still post the same message."""
     token   = os.environ.get("SLACK_BOT_TOKEN")
     channel = os.environ.get("SLACK_CHANNEL", "C0BUL9KGD52")   # #rfp-agent
     webhook = os.environ.get("SLACK_WEBHOOK_URL")
-    def payload(with_blocks):
-        p = {"text": text, "unfurl_links": False, "unfurl_media": False}
-        if token: p["channel"] = channel
-        if with_blocks and blocks: p["blocks"] = blocks
-        return json.dumps(p).encode()
-
+    payload = {"text": text, "unfurl_links": False, "unfurl_media": False}
+    if blocks:
+        payload["blocks"] = blocks
     if token:
-        body = payload(True)
-        req = urllib.request.Request("https://slack.com/api/chat.postMessage", data=body,
+        payload["channel"] = channel
+        req = urllib.request.Request("https://slack.com/api/chat.postMessage",
+            data=json.dumps(payload).encode(),
             headers={"Authorization": f"Bearer {token}",
                      "Content-Type": "application/json; charset=utf-8"})
         with urllib.request.urlopen(req, timeout=30) as r:
             resp = json.load(r)
-        if not resp.get("ok") and blocks:          # table block refused: plain text
-            print(f"[slack] blocks refused ({resp.get('error')}), retrying as text",
-                  file=sys.stderr)
-            req = urllib.request.Request("https://slack.com/api/chat.postMessage",
-                data=payload(False),
-                headers={"Authorization": f"Bearer {token}",
-                         "Content-Type": "application/json; charset=utf-8"})
-            with urllib.request.urlopen(req, timeout=30) as r:
-                resp = json.load(r)
         if not resp.get("ok"):
             raise RuntimeError("Slack chat.postMessage failed: " + str(resp.get("error")))
         return True
     if webhook:
-        for with_blocks in ((True, False) if blocks else (False,)):
-            try:
-                req = urllib.request.Request(webhook, data=payload(with_blocks),
-                    headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=30) as r:
-                    r.read()
-                return True
-            except Exception as e:
-                if with_blocks:
-                    print(f"[slack] blocks refused ({e}), retrying as text", file=sys.stderr)
-                    continue
-                raise
+        req = urllib.request.Request(webhook, data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            r.read()
+        return True
     return False
+
+
+def render_blocks(rows, stats, today):
+    """Slack Block Kit version of the digest: a header, funnel stats, then one
+    card per tender with scannable columns and an 'Open' button that deep-links
+    to that RFP in the portal. Renders natively (bot OR webhook) — unlike a
+    markdown table, which only the Slack connector converts."""
+    live = [r for r in rows if not r.get("disqualified")]
+    hot  = [r for r in rows if r.get("tier") == "HOT"]
+    warm = [r for r in rows if r.get("tier") == "WARM"]
+    dq   = [r for r in rows if r.get("disqualified")]
+    avg  = (sum(float(r["score"]) for r in rows) / len(rows)) if rows else 0
+    soon = [r for r in live if r.get("deadline")
+            and 0 <= (datetime.date.fromisoformat(r["deadline"][:10]) - today).days <= 14]
+
+    def deadline_cell(r):
+        if r.get("deadline_is_proxy") and r.get("deadline"):
+            return ":warning: To be confirmed"
+        if r.get("deadline"):
+            return f"{r['deadline'][:10]}  ({days_left(r.get('deadline'), today)})"
+        return "—"
+
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": f"\U0001F4E1 New RFP Batch — {today}", "emoji": True}},
+        {"type": "context", "elements": [{"type": "mrkdwn",
+            "text": f"*{len(rows)}* saved  ·  *{len(hot)}* HOT  ·  *{len(warm)}* WARM  ·  "
+                    f"*{len(dq)}* disqualified  ·  avg fit *{avg:.0f}*  ·  window {stats.get('days', 3)}d"}]},
+        {"type": "context", "elements": [{"type": "mrkdwn",
+            "text": f"Scanned {stats.get('scanned', 0):,} notices (DE {stats.get('scanned_de', 0):,} + "
+                    f"TED/EU {stats.get('scanned_ted', 0):,})  ·  CPV matched {stats.get('by_cpv', 0)}  ·  "
+                    f"full-text {stats.get('by_fulltext', 0)}"}]},
+    ]
+    if soon:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn",
+            "text": f":warning:  *{len(soon)} with a deadline inside 14 days* — decide bid/no-bid this week."}})
+    blocks.append({"type": "divider"})
+
+    shown = live[:15]   # Block Kit tops out at 50 blocks; the rest is in the portal
+    for i, r in enumerate(shown, 1):
+        title = clean_title(r.get("title"))[:140]
+        link  = f"{PORTAL}/rfp/{r['id']}" if PORTAL else (r.get("url") or "")
+        sec = {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*{i}. {title}*"},
+            "fields": [
+                {"type": "mrkdwn", "text": f"*Fit*\n{float(r.get('score') or 0):.0f}  ·  {r.get('tier') or '—'}"},
+                {"type": "mrkdwn", "text": f"*Deadline*\n{deadline_cell(r)}"},
+                {"type": "mrkdwn", "text": f"*Buyer*\n{(r.get('buyer') or '—')[:60]}"},
+                {"type": "mrkdwn", "text": f"*Country*\n{r.get('buyer_country') or '—'}"},
+            ],
+        }
+        if link:
+            sec["accessory"] = {"type": "button", "text": {"type": "plain_text", "text": "Open ↗", "emoji": True},
+                                "url": link, "action_id": f"open_{i}"}
+        blocks.append(sec)
+        blocks.append({"type": "divider"})
+
+    if not shown:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn",
+            "text": "_No new opportunities within the criteria in this window._"}})
+
+    foot = ":satellite_antenna: RFP Radar  ·  full batch in the portal → Sales · RFPs"
+    if len(live) > len(shown):
+        foot = f"+{len(live) - len(shown)} more in the portal  ·  " + foot
+    if dq:
+        foot = f"{len(dq)} disqualified ({(dq[0].get('disqualification_reason') or '')[:50]})  ·  " + foot
+    blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": foot}]})
+    return blocks
 
 
 def log_run(status, rows_affected, note=""):
@@ -268,33 +264,24 @@ def main(date=None, fmt="table"):
     rows = rest(f"rfps?{q}")
     batch = rest(f"rfp_batches?batch_date=eq.{today.isoformat()}&select=*")
     stats = batch[0] if batch else {}
+    live_n = len([r for r in rows if not r.get("disqualified")])
     # Never invent a row: no batch today means the scan did not run — say so
     # instead of posting a zeroed digest that looks like a real quiet day.
-    blocks = None
     if batch:
-        msg = render(rows, stats, today, fmt)
-        if fmt == "blocks":
-            msg = render(rows, stats, today, "code")   # text fallback for notifications
-            blocks = build_blocks(rows, stats, today)
+        msg = render(rows, stats, today, fmt)          # text (connector / stdout)
+        blocks = render_blocks(rows, stats, today)     # Block Kit (bot / webhook)
+        fallback = f":satellite_antenna: New RFP Batch — {today}: {live_n} tenders"
     else:
         msg = (f":satellite_antenna: _RFP Radar — {today}_\n"
                "_No batch recorded for today — the 06:00 UTC scan may not have run. "
                "Check `lecfmpp/labscubed-rfp-radar` → Actions → RFP Radar._")
-    live_n = len([r for r in rows if not r.get("disqualified")])
-    if post_slack(msg, blocks):
+        blocks = None
+        fallback = msg
+    if post_slack(fallback if blocks else msg, blocks):
         log_run("success" if batch else "partial", live_n,
                 "posted digest" if batch else "no batch for today")
-        print(f"[slack] posted ({live_n} notices)", file=sys.stderr)
     else:
-        # Printing is the intended fallback for the connector/human path, but in
-        # an unattended run it means the digest silently never reached anyone.
-        # Say so loudly: a scheduled job that quietly does nothing is the worst
-        # failure mode, because it looks exactly like a quiet day.
-        print("[slack] NOT POSTED - neither SLACK_WEBHOOK_URL nor SLACK_BOT_TOKEN "
-              "is set in this environment. If this is the scheduled job, the secret "
-              "is missing or misnamed (check Settings > Secrets and variables > "
-              "Actions > Secrets, not Variables).", file=sys.stderr)
-        print(msg)
+        print(msg)   # no Slack creds: print so a connector/human can post it
 
 
 if __name__ == "__main__":
