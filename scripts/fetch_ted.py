@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Fonte 2 — UE inteira: TED (Tenders Electronic Daily), api.ted.europa.eu.
-API publica, POST /v3/notices/search, SEM autenticacao.
-Cobre os 27 estados-membros + EEE acima dos limiares europeus.
+"""Source 2 - the whole EU: TED (Tenders Electronic Daily), api.ted.europa.eu.
+Public API, POST /v3/notices/search, NO authentication.
+Covers the 27 member states above the European thresholds.
 """
 import json, sys, os, urllib.request
 sys.path.insert(0, os.path.dirname(__file__))
@@ -16,7 +16,7 @@ FIELDS = ["publication-number", "notice-title", "buyer-name", "publication-date"
 
 def q(days=7):
     cpvs = " ".join(sorted(CPV_CORE | (CPV_BROAD - {"48000000", "73000000", "42000000"})))
-    # notice-type: so avisos de concurso (cn-*), nao adjudicacoes
+    # notice-type: calls for competition only (cn-*), not award notices
     return (f"classification-cpv IN ({cpvs}) "
             f"AND publication-date >= today(-{days}) "
             f"AND notice-type IN (cn-standard cn-social)")
@@ -28,7 +28,7 @@ def call(query, page=1, limit=100):
         "Content-Type": "application/json",
         "User-Agent": "LabsCubed-RFP-Radar/1.0 (leandro@labscubed.com)"})
     import time
-    for attempt in range(5):                       # TED devolve 429 sob carga
+    for attempt in range(5):                       # TED returns 429 under load
         try:
             with urllib.request.urlopen(req, timeout=120) as r:
                 return json.load(r)
@@ -42,13 +42,13 @@ FT_TERMS = ["universal testing machine", "tensile testing machine", "tensile tes
             "tear strength", "machine d'essai de traction", "ensayo de tracción"]
 
 def q_fulltext(days=7):
-    """2a passada: apanha o que o filtro de CPV perde (CPV mal atribuido).
-    NOTA: FT~ do TED procura no TITULO (traduzido p/ EN), nao na descricao."""
+    """Second pass: catches what the CPV filter misses (mis-assigned CPV).
+    NOTE: TED's FT~ searches the TITLE (translated to EN), not the description."""
     terms = " OR ".join(f'FT~("{t}")' for t in FT_TERMS)
     return f"({terms}) AND publication-date >= today(-{days})"
 
 def flat(v):
-    """TED devolve dicts multilingues {'eng':[...], 'deu':[...]}."""
+    """TED returns multilingual dicts {'eng':[...], 'deu':[...]}."""
     if v is None: return ""
     if isinstance(v, str): return v
     if isinstance(v, list): return " ".join(flat(x) for x in v)
@@ -74,7 +74,7 @@ def run(days=7, countries=None):
             desc  = flat(n.get("description-lot"))
             pts, tier, why = score_notice(title, desc, n.get("classification-cpv") or [])
             if label == "fulltext" and tier == "COLD":
-                pts, tier, why = max(pts, 45), "WARM", (why + "; achado por texto livre").strip("; ")
+                pts, tier, why = max(pts, 45), "WARM", (why + "; found by full-text search").strip("; ")
             if tier == "COLD": continue
             ctry = sorted(set(n.get("place-of-performance-country-lot") or []))
             if countries and not (set(ctry) & set(countries)): continue
@@ -96,10 +96,10 @@ def run(days=7, countries=None):
 if __name__ == "__main__":
     days = int(sys.argv[1]) if len(sys.argv) > 1 else 7
     res, total = run(days)
-    print(f"[TED] ultimos {days}d: {total} avisos nos CPV-alvo -> {len(res)} qualificados "
+    print(f"[TED] last {days}d: {total} notices in target CPVs -> {len(res)} qualified "
           f"(HOT={sum(1 for r in res if r['tier']=='HOT')}, "
           f"WARM={sum(1 for r in res if r['tier']=='WARM')})")
     json.dump(res, open(f"data/ted_{days}d.json", "w"), ensure_ascii=False, indent=1)
     for r in res[:20]:
         print(f"  {r['score']:3d} {r['tier']:4} {','.join(r['country'])[:7]:7} | {r['title'][:70]}")
-        print(f"      {r['buyer'][:60]} | prazo {r['deadline']} | {r['why'][:95]}")
+        print(f"      {r['buyer'][:60]} | deadline {r['deadline']} | {r['why'][:95]}")

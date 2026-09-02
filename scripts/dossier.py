@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Dossie de uma RFP: puxa o registo completo, localiza os documentos,
-monta a timeline e escreve um briefing + um prompt pronto para o Claude analisar.
-   python3 scripts/dossier.py <notice-id>        # 25763636 (DE) ou 588408-2026 (TED)
+"""RFP dossier: pulls the full record, locates the documents, builds the
+timeline and writes a briefing plus a ready-made prompt for Claude to analyse.
+   python3 scripts/dossier.py <notice-id>        # 25763636 (DE) or 588408-2026 (TED)
 """
 import io, json, os, re, sys, zipfile, datetime, urllib.request, pathlib
 
@@ -14,7 +14,7 @@ def get(url, timeout=120):
     with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
         return r.read()
 
-# ---------- fonte TED ------------------------------------------------------
+# ---------- source: TED ----------------------------------------------------
 def from_ted(pub):
     body = json.dumps({"query": f'publication-number={pub}', "limit": 1, "fields": [
         "publication-number", "notice-title", "description-lot", "buyer-name",
@@ -25,7 +25,7 @@ def from_ted(pub):
     req = urllib.request.Request(TED_API, data=body,
                                  headers={**UA, "Content-Type": "application/json"})
     import time
-    for attempt in range(5):                       # TED devolve 429 sob carga
+    for attempt in range(5):                       # TED returns 429 under load
         try:
             with urllib.request.urlopen(req, timeout=90) as r:
                 d = json.load(r); break
@@ -33,7 +33,7 @@ def from_ted(pub):
             if e.code != 429 or attempt == 4: raise
             time.sleep(2 ** attempt)
     n = (d.get("notices") or [None])[0]
-    if not n: raise SystemExit(f"TED: aviso {pub} nao encontrado")
+    if not n: raise SystemExit(f"TED: notice {pub} not found")
     def flat(v):
         if v is None: return ""
         if isinstance(v, str): return v
@@ -53,11 +53,12 @@ def from_ted(pub):
             "country": flat(n.get("place-of-performance-country-lot")),
             "value": flat(n.get("estimated-value-lot")) or flat(n.get("total-value")),
             "url": f"https://ted.europa.eu/en/notice/-/detail/{pub}",
-            # NOTA: /xml e /pdf do TED sao assincronos (HTTP 202, corpo vazio na 1a chamada).
-            # A pagina de detalhe e o caminho fiavel; traz o link do portal do comprador.
+            # NOTE: TED's /xml and /pdf are asynchronous (HTTP 202, empty body on the
+            # first call). The detail page is the reliable route; it carries the link
+            # to the buyer's own procurement portal.
             "docs": [f"https://ted.europa.eu/en/notice/-/detail/{pub}"]}
 
-# ---------- fonte Alemanha (eForms XML no export diario) --------------------
+# ---------- source: Germany (eForms XML inside the daily export) -----------
 NS = re.compile(r"^\{[^}]*\}")
 def txt(el): return (el.text or "").strip() if el is not None else ""
 
@@ -81,8 +82,8 @@ def from_de(nid, day=None):
         for t in ("EndDate", "ReceiptDate", "SubmissionDueDate"):
             v = [txt(e) for e in find(t) if txt(e)]
             if v: dl = v[0][:10]; break
-        # 1o <Name> = ContractingParty (comprador); o <Name> dentro de
-        # ProcurementProject = objeto do contrato. Nao confundir os dois.
+        # First <Name> = ContractingParty (the buyer); the <Name> inside
+        # ProcurementProject = the contract subject. Do not confuse the two.
         names = [txt(e) for e in find("Name") if txt(e)]
         proj = [txt(e) for e in find("Name")
                 if e in [c for pp in find("ProcurementProject") for c in pp.iter()]]
@@ -98,88 +99,92 @@ def from_de(nid, day=None):
                 "value": txt(next(iter(find("EstimatedOverallContractAmount")), None)),
                 "url": f"https://oeffentlichevergabe.de/ui/de/search/details/{nid}/01",
                 "docs": sorted(set(docs)), "pubday": d}
-    raise SystemExit(f"DE: aviso {nid} nao encontrado nos exports dos ultimos 45 dias")
+    raise SystemExit(f"DE: notice {nid} not found in the last 45 days of exports")
 
 # ---------- timeline -------------------------------------------------------
 def timeline(rec):
     today = datetime.date.today()
     if not rec.get("deadline"):
-        return ["**Prazo nao publicado no registo estruturado** — confirmar na pagina "
-                "do edital ANTES de planear. Toda a timeline abaixo depende disso."], None
+        return ["**Deadline not published in the structured record** - confirm it on the "
+                "notice page BEFORE planning. Everything below depends on it."], None
     dl = datetime.date.fromisoformat(rec["deadline"][:10])
     left = (dl - today).days
-    # marcos contados para tras a partir da data-limite
+    # milestones counted backwards from the deadline
     marks = [(dl - datetime.timedelta(days=n), lbl) for n, lbl in [
-        (0,  "PRAZO FINAL — submissao no portal (submeter 24h antes; upload falha)"),
-        (2,  "Revisao final: assinaturas, anexos, formato, conformidade"),
-        (7,  "Proposta tecnica + comercial fechada internamente"),
-        (14, "Ultimo dia util para PERGUNTAS ao comprador (verificar prazo real no edital)"),
-        (18, "Decisao bid / no-bid + montagem das referencias e certificados"),
-        (21, "Analise tecnica: matriz de requisitos vs CubeTen/CubeOne/CubeFlex"),
+        (0,  "DEADLINE - submit on the portal (submit 24h early; uploads fail)"),
+        (2,  "Final review: signatures, attachments, format, compliance"),
+        (7,  "Technical + commercial proposal closed internally"),
+        (14, "Last working day for QUESTIONS to the buyer (check the real cut-off in the notice)"),
+        (18, "Bid / no-bid decision + assemble references and certificates"),
+        (21, "Technical analysis: requirement matrix vs CubeTen/CubeOne/CubeFlex"),
     ]]
-    lines = [f"**Prazo final: {dl.isoformat()} — faltam {left} dias**", ""]
+    lines = [f"**Deadline: {dl.isoformat()} - {left} days left**", ""]
     for d, lbl in sorted(marks):
-        flag = "✅" if d < today else ("⚠️ HOJE" if d == today else "")
-        lines.append(f"- `{d.isoformat()}` {'(passou) ' if d < today else ''}{lbl} {flag}")
+        flag = "[done]" if d < today else ("**TODAY**" if d == today else "")
+        lines.append(f"- `{d.isoformat()}` {lbl} {flag}")
     if left < 21:
-        lines += ["", f"> ⚠️ **Janela curta ({left} dias).** Os marcos acima estao comprimidos — "
-                      "decidir bid/no-bid nas proximas 48h."]
+        lines += ["", f"> **Tight window ({left} days).** The milestones above are compressed - "
+                      "decide bid/no-bid within 48 hours."]
     return lines, left
 
-# ---------- relatorio ------------------------------------------------------
+# ---------- report ---------------------------------------------------------
 def report(rec):
     tl, left = timeline(rec)
     docs = rec.get("docs") or []
-    md = [f"# Dossie RFP — {rec['title'][:120]}", "",
+    md = [f"# RFP Dossier - {rec['title'][:120]}", "",
           "| | |", "|---|---|",
           f"| **ID** | `{rec['id']}` ({rec['source']}) |",
-          f"| **Comprador** | {rec['buyer'] or '—'} |",
-          f"| **Pais** | {rec.get('country') or '—'} |",
-          f"| **Publicado** | {rec.get('published') or '—'} |",
-          f"| **Prazo** | {rec.get('deadline') or '**nao publicado — confirmar**'} |",
-          f"| **CPV** | {', '.join(rec['cpv']) or '—'} |",
-          f"| **Procedimento** | {rec.get('procedure') or '—'} |",
-          f"| **Valor estimado** | {rec.get('value') or '—'} |",
-          f"| **Edital** | {rec['url']} |", "",
-          "## Objeto", "", (rec.get("desc") or "—")[:2500], "",
-          "## Timeline", ""] + tl + ["", "## Documentos da licitacao", ""]
+          f"| **Buyer** | {rec['buyer'] or '-'} |",
+          f"| **Country** | {rec.get('country') or '-'} |",
+          f"| **Published** | {rec.get('published') or '-'} |",
+          f"| **Deadline** | {rec.get('deadline') or '**not published - confirm**'} |",
+          f"| **CPV** | {', '.join(rec['cpv']) or '-'} |",
+          f"| **Procedure** | {rec.get('procedure') or '-'} |",
+          f"| **Estimated value** | {rec.get('value') or '-'} |",
+          f"| **Notice** | {rec['url']} |", "",
+          "## Subject", "", (rec.get("desc") or "-")[:2500], "",
+          "## Timeline", ""] + tl + ["", "## Tender documents", ""]
     md += [f"- {u}" for u in docs] or \
-          ["- Nenhum link direto no registo estruturado. Abrir a pagina do edital "
-           "e descarregar manualmente (muitos portais exigem registo/'Teilnahme aktivieren')."]
-    md += ["", "## Proximos passos", "",
-        "1. **Confirmar o prazo real** na pagina do edital (o registo estruturado nem sempre o traz).",
-        "2. **Bid / no-bid** — usar o crivo tecnico abaixo.",
-        "3. Se BID: registar no portal do comprador e ativar a participacao "
-        "(na Alemanha, 'Teilnahme aktivieren' — so assim se recebem as alteracoes ao edital).",
-        "4. Descarregar todos os anexos e correr a analise do Claude (prompt no fim deste ficheiro).",
-        "5. Submeter as perguntas ao comprador dentro do prazo — e a unica alavanca para "
-        "influenciar especificacoes escritas a medida de um concorrente.", "",
-        "## Crivo tecnico LabsCubed", "",
-        "| Criterio | Limite | Verificar no edital |",
+          ["- No direct link in the structured record. Open the notice page and download "
+           "manually (many portals require registration / activating participation)."]
+    md += ["", "## Next steps", "",
+        "1. **Confirm the real deadline** on the notice page (the structured record does not always carry it).",
+        "2. **Bid / no-bid** - use the technical screen below.",
+        "3. If BID: register on the buyer's portal and activate participation "
+        "(in Germany, 'Teilnahme aktivieren' - only then do you receive amendments to the notice).",
+        "4. Download every attachment and run the Claude analysis (prompt at the end of this file).",
+        "5. Submit questions to the buyer within the cut-off - it is the only lever to influence "
+        "specifications written around a competitor.", "",
+        "## LabsCubed technical screen", "",
+        "| Criterion | Limit | Check in the notice |",
         "|---|---|---|",
-        "| Forca max. | CubeTen 10 kN · CubeOne 1 kN | pedido >10 kN = **no-bid** |",
-        "| Material | plasticos rigidos, borrachas, elastomeros | metal/betao = **no-bid** |",
-        "| Ensaio | tracao, flexao, rasgo | dureza, impacto/Charpy, fadiga = **no-bid** |",
-        "| Normas | ASTM D638/D412/D624/D790 · ISO 527/37/178 | outras = avaliar |",
-        "| Alongamento | ate 1000% | acima = **no-bid** |",
-        "| Automacao | ate 15 provetes/ciclo | pedido maior = avaliar |",
-        "| Espaco/peso | 0,8 × 1,2 m · 113 kg | verificar restricoes do laboratorio |",
-        "| Software | Portal cloud + AI Suite; SAP/Uncountable/Alpha Workbench | "
-        "exigencia on-premise = risco |", "",
-        "## Prompt para analise do Claude", "", "```",
-        f"Analisa os documentos da RFP em {ROOT}/dossiers/{rec['id']}/ para a LabsCubed",
-        "(CubeTen: tracao plasticos rigidos 10kN ASTM D638/ISO 527; CubeOne: tracao/rasgo",
-        "borrachas 1kN ASTM D412/ISO 37/D624; CubeFlex: flexao ASTM D790/ISO 178;",
-        "Portal cloud + AI Suite). Produz:",
-        "1. Veredito bid/no-bid com justificacao, usando o crivo tecnico do dossie.",
-        "2. Matriz requisito-a-requisito: exigencia | CubeTen/One/Flex cumpre? | evidencia | lacuna.",
-        "3. Lacunas tecnicas e como as endereçar (parceiro, opcao, excecao declarada).",
-        "4. Criterios de adjudicacao e peso de cada um; onde ganhamos e onde perdemos pontos.",
-        "5. Requisitos de elegibilidade (referencias, certificados, volume de negocios, seguros)",
-        "   e quais deles nao cumprimos hoje.",
-        "6. Perguntas a submeter ao comprador (especificacoes ambiguas ou escritas a medida",
-        "   de um concorrente).",
-        "7. Estrutura secao-a-secao da proposta, com quem responde o que e em quantos dias.",
+        "| Max force | CubeTen 10 kN · CubeOne 1 kN | request >10 kN = **no-bid** |",
+        "| Material | rigid plastics, rubbers, elastomers | metal/concrete = **no-bid** |",
+        "| Test type | tensile, flexure, tear | hardness, impact/Charpy, fatigue = **no-bid** |",
+        "| Standards | ASTM D638/D412/D624/D790 · ISO 527/37/178 | others = assess |",
+        "| Elongation | up to 1000% | above = **no-bid** |",
+        "| Automation | up to 15 specimens per run | larger request = assess |",
+        "| Footprint | 0.8 x 1.2 m · 113 kg | check the lab's constraints |",
+        "| Software | cloud Portal + AI Suite; SAP/Uncountable/Alpha Workbench | "
+        "on-premise requirement = risk |", "",
+        "## Prompt for the Claude analysis", "", "```",
+        f"Analyse the RFP documents in {ROOT}/dossiers/{rec['id']}/ for LabsCubed",
+        "(CubeTen: tensile, rigid plastics, 10kN, ASTM D638/ISO 527; CubeOne: tensile/tear,",
+        "rubbers, 1kN, ASTM D412/ISO 37/D624; CubeFlex: flexure, ASTM D790/ISO 178;",
+        "cloud Portal + AI Suite). Produce:",
+        "1. Bid/no-bid verdict with reasoning, using the technical screen in this dossier.",
+        "2. Requirement-by-requirement matrix: requirement | does CubeTen/One/Flex meet it? |",
+        "   evidence | gap.",
+        "3. Technical gaps and how to address each (partner, option, declared exception).",
+        "4. Award criteria and their weights; where we win points and where we lose them.",
+        "5. Eligibility requirements (references, certificates, turnover, insurance) and",
+        "   which of them we do not meet today.",
+        "6. Questions to submit to the buyer (ambiguous specs, or specs written around",
+        "   a competitor).",
+        "7. Section-by-section proposal structure, with who answers what and in how many days.",
+        "",
+        "Mark anything you cannot evidence from the documents as [GAP] or [NEEDS HUMAN].",
+        "Never assert compliance that the documents do not support.",
         "```", ""]
     return "\n".join(md)
 
@@ -194,11 +199,11 @@ if __name__ == "__main__":
         try:
             b = get(u, timeout=90)
             if not b:                       # 202 assincrono / vazio: nao gravar lixo
-                print(f"  vazio (assincrono), abrir no browser: {u}", file=sys.stderr); continue
+                print(f"  empty (async), open in a browser: {u}", file=sys.stderr); continue
             ext = ".pdf" if b[:4] == b"%PDF" else ".html"
             (outdir / f"doc{i}{ext}").write_bytes(b)
-            print(f"  baixado: doc{i}{ext} ({len(b)} bytes) <- {u}", file=sys.stderr)
+            print(f"  downloaded: doc{i}{ext} ({len(b)} bytes) <- {u}", file=sys.stderr)
         except Exception as e:
-            print(f"  NAO baixou {u}: {e}", file=sys.stderr)
+            print(f"  FAILED to download {u}: {e}", file=sys.stderr)
     print(report(rec))
     print(f"\n--> {outdir}/dossier.md", file=sys.stderr)

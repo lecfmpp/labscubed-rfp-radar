@@ -1,114 +1,111 @@
 # RFP Radar — LabsCubed
 
-Deteta editais públicos de equipamento de ensaio de materiais na Alemanha e na UE,
-qualifica-os contra o envelope técnico dos produtos, grava no Supabase e publica
-uma tabela em `#rfp-agent`. **Corre inteiramente em GitHub Actions** — nenhuma
-máquina local envolvida.
+Detects public tender notices for materials-testing equipment across Germany and the
+EU, qualifies them against the product envelope, writes them to Supabase and posts a
+table to `#rfp-agent`. **Runs entirely on GitHub Actions** — no local machine involved.
 
 ```
-GitHub Actions (cron 06:00 UTC, dias úteis)
-  └─ radar.py         varre DE Datenservice + TED/UE, pontua, escreve o lote
-     └─ push_supabase.py   upsert em `rfps`, regista em `automation_runs`
-        └─ slack_post.py   tabela em #rfp-agent, só com os editais NOVOS
+GitHub Actions (cron 06:00 UTC, weekdays)
+  └─ radar.py             scan DE Datenservice + TED/EU, score, write the batch
+     └─ push_supabase.py  upsert into `rfps`, log to `automation_runs`
+        └─ slack_post.py  table in #rfp-agent, NEW notices only
 ```
 
-Estado: não há ficheiro de estado nem escrita no repo. O que já foi visto vive na
-constraint `unique(source, notice_id)` da tabela `rfps`.
+There is no state file and nothing is written back to the repo. What has already been
+seen lives in the `unique(source, notice_id)` constraint on the `rfps` table.
 
-## Configuração
+## Setup
 
 **Secrets** (Settings → Secrets and variables → Actions → Secrets):
 
-| Secret | Onde obter |
+| Secret | Where to get it |
 |---|---|
 | `SUPABASE_URL` | Supabase → Project Settings → API → Project URL |
-| `SUPABASE_SERVICE_KEY` | mesma página → `service_role` key |
-| `SLACK_BOT_TOKEN` | app Slack → OAuth & Permissions → Bot token (`xoxb-…`), scope `chat:write` |
+| `SUPABASE_SERVICE_KEY` | same page → `service_role` key |
+| `SLACK_BOT_TOKEN` | Slack app → OAuth & Permissions → Bot token (`xoxb-…`), scope `chat:write` |
 | `SLACK_CHANNEL_ID` | `C0BUL9KGD52` (#rfp-agent) |
 
-**Variable** (mesmo ecrã, separador Variables):
+**Variable** (same screen, Variables tab):
 
-| Variable | Para quê |
+| Variable | Purpose |
 |---|---|
-| `PORTAL_BASE_URL` | base do portal, ex. `https://portal.labscubed.com`. Sem isto a tabela do Slack liga ao edital original em vez da página interna. |
+| `PORTAL_BASE_URL` | portal origin, e.g. `https://portal.labscubed.com`. Without it the Slack table links to the original notice instead of the internal page. |
 
-O bot do Slack tem de ser convidado ao canal: `/invite @<bot>` em `#rfp-agent`.
+The Slack bot must be invited to the channel: `/invite @<bot>` in `#rfp-agent`.
 
-## Correr à mão
+## Running it manually
 
-Actions → **RFP Radar** → *Run workflow* (aceita a janela em dias).
-
-## Fontes (ambas públicas, sem autenticação)
-
-| Fonte | Endpoint | Cobertura |
-|---|---|---|
-| Alemanha — Datenservice Öffentlicher Einkauf | `GET oeffentlichevergabe.de/api/notice-exports?pubDay=YYYY-MM-DD&format=csv.zip` | Federal + Länder + municípios, **acima e abaixo** dos limiares UE |
-| UE — TED | `POST api.ted.europa.eu/v3/notices/search` | 27 estados-membros, só **acima** dos limiares |
-
-Volumes medidos: ~985 avisos/dia na Alemanha; 19.222/30 dias nos CPV-alvo no TED.
-
-### Porque não se raspa o site da BAM
-
-A página da BAM é institucional. Os editais dela estão no e-Vergabe
-(`evergabe-online.de/search.html?...&ids=22`), que corre em Apache Wicket: a busca é
-POST com estado de sessão, **não é parametrizável por URL** (testado). A BAM publica
-em paralelo nas duas fontes acima, que têm API — mais barato e mais fiável.
-
-Sobre FireCrawl: só a Alemanha publica ~30.000 avisos/mês. Raspar as páginas de
-detalhe custaria ~30.000 créditos/mês; a API entrega os mesmos 30.000 **num pedido**.
-FireCrawl fica reservado para buscar anexos em portais sem API (5–20 páginas/mês,
-dentro do tier grátis).
-
-## Qualificação
-
-Três camadas em `scripts/criteria.py`:
-
-1. **CPV por prefixo** — `3854*` (inclui 38542000 servo-hidráulico), `3850*`, `3897*`, `3890*`, `38400*`
-2. **Palavras-chave** DE/EN/FR/ES/PT/IT + normas (ASTM D638/D412/D624/D790, ISO 527/37/178)
-3. **Exclusões** — betão, asfalto, solo, soldadura, dureza, Charpy, contratos de manutenção
-
-Corte: **≥60 HOT** · **40–59 WARM** · **<40 descartado**. Só passam avisos com
-`formType` em `competition`/`change`/`planning` — adjudicações (`can-*`) ficam de fora.
-
-**Desqualificação** é distinta de "não deu match": o edital é da nossa área mas cai
-fora do envelope (>10 kN, metal/betão, dureza/impacto/fadiga, alongamento >1000%).
-Fica em `rfps.disqualified` + `disqualification_reason`, para se poder reportar
-"vimos 40, desqualificámos 38, e porquê".
-
-Precisão medida em agosto/2026: **22.765 avisos → 2 oportunidades abertas**.
-
-### A busca full-text é obrigatória
-
-A segunda passagem do TED encontrou uma *"Static materials testing machine"* da
-Fraunhofer classificada com **CPV 42990000** (maquinaria diversa) — fora de qualquer
-CPV de laboratório. Só o filtro por CPV teria perdido este edital.
-
-## Dossiê por edital
+Actions → **RFP Radar** → *Run workflow* (takes the window in days).
 
 ```bash
-python3 scripts/dossier.py 588408-2026     # TED
-python3 scripts/dossier.py 25763636        # Alemanha
+python3 scripts/radar.py --days 3          # scan only, writes reports/radar_<date>.md
+python3 scripts/dossier.py 588408-2026     # full dossier for one notice (TED)
+python3 scripts/dossier.py 25763636        # full dossier for one notice (Germany)
 ```
 
-Puxa o registo completo, descarrega os documentos, e escreve um briefing com
-timeline calculada para trás a partir do prazo (D−21 análise, D−14 perguntas ao
-comprador, D−2 revisão), o crivo bid/no-bid, e um prompt pronto para a análise
-detalhada com o Claude.
+## Sources (both public, no authentication)
 
-## Limitações conhecidas
+| Source | Endpoint | Coverage |
+|---|---|---|
+| Germany — Datenservice Öffentlicher Einkauf | `GET oeffentlichevergabe.de/api/notice-exports?pubDay=YYYY-MM-DD&format=csv.zip` | Federal, Länder and municipal — **above and below** the EU thresholds |
+| EU — TED | `POST api.ted.europa.eu/v3/notices/search` | 27 member states, **above** the thresholds only |
 
-- **O export CSV alemão não traz a data-limite de submissão** (BT-131). Usa-se
-  `publicOpeningDate` como proxy e marca-se `deadline_is_proxy=true`. O prazo exato
-  vem do eForms XML ou da página do edital, via `dossier.py`.
-- **`/xml` e `/pdf` do TED são assíncronos** (HTTP 202, corpo vazio na 1.ª chamada).
-- **TED devolve 429 sob carga** — backoff exponencial de 5 tentativas.
-- **Descrições no TED estão no idioma original.** Títulos são traduzidos para EN, mas
-  descrições em polaco/checo/húngaro não casam com as keywords atuais.
-- **O export do dia corrente ainda não existe** (HTTP 400). Correr com `--days ≥ 2`.
+Measured volumes: ~985 notices/day in Germany; 19,222 notices per 30 days in the
+target CPVs on TED.
 
-## Calibração
+### Why the BAM website is not scraped
 
-`rfp_feedback` segue o molde de `icp_feedback`: o comercial marca cada resultado
-(`good` / `noise` / `missed`) e esses ratings recalibram os pesos em `criteria.py`.
-Vale correr duas semanas antes de alargar a geografia — alargar antes de saber se os
-critérios estão certos multiplica o ruído, não as oportunidades.
+BAM's tender page is institutional — it holds no notices. Its actual tenders live on
+e-Vergabe (`evergabe-online.de/search.html?...&ids=22`, where `ids=22` is BAM), which
+runs on Apache Wicket: the search is a stateful POST with session-scoped component
+paths, so it is **not parameterisable by URL** (tested — four URL variants, none work).
+BAM publishes in parallel to both sources above, which have APIs. Using the API is
+cheaper and more reliable than driving Wicket.
+
+On FireCrawl: Germany alone publishes ~30,000 notices/month. Scraping the detail pages
+would cost ~30,000 credits/month; the API returns the same 30,000 **in a single
+request**. FireCrawl is reserved for fetching attachments from portals with no API
+(5–20 pages/month, inside the free tier).
+
+## Qualification
+
+Three layers in `scripts/criteria.py`:
+
+1. **CPV by prefix** — `3854*` (includes 38542000 servo-hydraulic), `3850*`, `3897*`, `3890*`, `38400*`
+2. **Keywords** in DE/EN/FR/ES/PT/IT plus standards (ASTM D638/D412/D624/D790, ISO 527/37/178)
+3. **Exclusions** — concrete, asphalt, soil, welding, hardness, Charpy, maintenance contracts
+
+Thresholds: **≥60 HOT** · **40–59 WARM** · **<40 discarded**. Only notices whose
+`formType` is `competition`, `change` or `planning` pass — award notices (`can-*`) are
+excluded.
+
+**Disqualification is distinct from "did not match"**: the notice is in our field but
+falls outside the envelope (>10 kN, metal/concrete, hardness/impact/fatigue, elongation
+>1000%). It lands in `rfps.disqualified` + `disqualification_reason`, so the team can
+report "we saw 40, we ruled out 38, and here is why".
+
+Measured precision over August 2026: **22,765 notices → 2 open opportunities**.
+
+### The full-text pass is not optional
+
+TED's second pass found a *"Static materials testing machine"* from Fraunhofer
+classified under **CPV 42990000** (miscellaneous machinery) — outside every laboratory
+CPV. A CPV-only filter would have missed it.
+
+## Known limitations
+
+- **The German CSV export does not carry the tender submission deadline** (BT-131).
+  `publicOpeningDate` is used as a proxy and flagged with `deadline_is_proxy=true`. The
+  exact deadline comes from the eForms XML or the notice page, via `dossier.py`.
+- **TED's `/xml` and `/pdf` are asynchronous** (HTTP 202, empty body on the first call).
+- **TED returns 429 under load** — exponential backoff, five attempts.
+- **TED descriptions are in the original language.** Titles are translated to English,
+  but descriptions in Polish, Czech or Hungarian will not match the current keywords.
+- **The current day's export does not exist yet** (HTTP 400). Run with `--days ≥ 2`.
+
+## Calibration
+
+`rfp_feedback` follows the `icp_feedback` pattern: the sales team rates each result
+(`good` / `noise` / `missed`) and those ratings recalibrate the weights in
+`criteria.py`. Worth running two weeks before widening the geography — widening before
+the criteria are proven multiplies noise, not opportunities.

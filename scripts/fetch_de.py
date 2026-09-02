@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Fonte 1 — Alemanha: Datenservice Oeffentlicher Einkauf (oeffentlichevergabe.de).
-Interface Open Data oficial, sem autenticacao. Export diario/mensal em ZIP de CSVs.
-GET /api/notice-exports?pubDay=YYYY-MM-DD&format=csv.zip   (ou pubMonth=YYYY-MM)
+"""Source 1 - Germany: Datenservice Oeffentlicher Einkauf (oeffentlichevergabe.de).
+Official Open Data interface, no authentication. Daily/monthly ZIP of CSVs.
+GET /api/notice-exports?pubDay=YYYY-MM-DD&format=csv.zip   (or pubMonth=YYYY-MM)
 """
 import csv, io, sys, os, zipfile, urllib.request, json
 sys.path.insert(0, os.path.dirname(__file__))
@@ -43,21 +43,21 @@ def run(period):
             except ValueError: pass
 
     buyer, city = {}, {}
-    for r in rows(z, "organisation.csv"):          # 1a org = entidade adjudicante
+    for r in rows(z, "organisation.csv"):          # first org = contracting authority
         n = r["noticeIdentifier"]
         buyer.setdefault(n, r.get("organisationName") or "")
         city.setdefault(n, f'{r.get("organisationCity","")} / {r.get("organisationCountryCode","")}')
 
-    # ATENCAO: o export CSV do DOE nao traz a data-limite de submissao (BT-131).
-    # publicOpeningDate (abertura publica) e o melhor proxy disponivel;
-    # o prazo exato e extraido do eForms XML / pagina de detalhe pelo dossier.py.
+    # NOTE: the DOE CSV export does not carry the tender submission deadline (BT-131).
+    # publicOpeningDate is the best available proxy; the exact deadline is pulled
+    # from the eForms XML / detail page by dossier.py.
     deadline = {}
     for r in rows(z, "submissionTerms.csv"):
         if r.get("publicOpeningDate"):
             deadline.setdefault(r["noticeIdentifier"], r["publicOpeningDate"][:10])
 
-    # So oportunidades ABERTAS: competition (concurso) e planning (pre-aviso).
-    # Exclui result/can-* (ja adjudicado) e cont-modif (alteracao de contrato).
+    # OPEN opportunities only: competition and planning (prior information).
+    # Excludes result/can-* (already awarded) and cont-modif (contract change).
     OPEN = {"competition", "change", "planning"}
     out = []
     for nid, n in notices.items():
@@ -81,7 +81,7 @@ def run(period):
         })
     out.sort(key=lambda r: -r["score"])
     seen, dedup = set(), []
-    for r in out:                      # 1 linha por procedimento (versoes/lotes repetem)
+    for r in out:                      # one row per procedure (versions/lots repeat)
         k = r["procedure"] or r["id"]
         if k in seen: continue
         seen.add(k); dedup.append(r)
@@ -90,7 +90,7 @@ def run(period):
 if __name__ == "__main__":
     period = sys.argv[1]
     res, total = run(period)
-    print(f"[DE] {period}: {total} avisos analisados -> {len(res)} qualificados "
+    print(f"[DE] {period}: {total} notices scanned -> {len(res)} qualified "
           f"(HOT={sum(1 for r in res if r['tier']=='HOT')}, "
           f"WARM={sum(1 for r in res if r['tier']=='WARM')})")
     json.dump(res, open(f"data/de_{period}.json", "w"), ensure_ascii=False, indent=1)

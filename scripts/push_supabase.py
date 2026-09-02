@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Envia o lote do radar para o Supabase (tabela rfps) e regista em automation_runs.
+"""Push the radar batch into Supabase (rfps table) and log it in automation_runs.
    python3 scripts/push_supabase.py data/radar_2026-09-02.json
 Env: SUPABASE_URL, SUPABASE_SERVICE_KEY
 """
@@ -46,8 +46,8 @@ def to_row(r, batch):
     }
 
 def known_ids(rows):
-    """Quais destes avisos ja estao na BD. O estado vive no Supabase, nao em
-    ficheiro nem no git — assim o Action nao precisa de escrever no repo."""
+    """Which of these notices are already in the DB. State lives in Supabase,
+    not in a file or in git - so the Action never writes back to the repo."""
     if not rows: return set()
     ids = ",".join(f'"{r["notice_id"]}"' for r in rows)
     got = rest("GET", f"rfps?select=source,notice_id&notice_id=in.({ids})")
@@ -62,10 +62,10 @@ def main(path):
     fresh = [r for r in rows if (r["source"], r["notice_id"]) not in seen]
     saved = []
     if rows:
-        # upsert por (source, notice_id) — correr duas vezes nao duplica
+        # upsert on (source, notice_id) - running twice never duplicates
         rest("POST", "rfps?on_conflict=source,notice_id", rows,
              prefer="resolution=merge-duplicates,return=minimal")
-        # so os NOVOS e que vao para o Slack
+        # only the NEW ones go to Slack
         if fresh:
             ids = ",".join(f'"{r["notice_id"]}"' for r in fresh)
             saved = rest("GET", f"rfps?select=*&notice_id=in.({ids})")
@@ -75,10 +75,10 @@ def main(path):
         "started_at": started,
         "completed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "status": "success", "rows_affected": len(fresh),
-        "notes": (f"{len(rows)} qualificados ({len(fresh)} novos) · "
-                  f"{dq} desqualificados pelo crivo tecnico · fontes: DE Datenservice + TED/UE"),
+        "notes": (f"{len(rows)} qualified ({len(fresh)} new) · "
+                  f"{dq} disqualified by the technical screen · sources: DE Datenservice + TED/EU"),
     }], prefer="return=minimal")
-    print(f"[supabase] {len(rows)} upserted, {len(fresh)} novos, {dq} desqualificados")
+    print(f"[supabase] {len(rows)} upserted, {len(fresh)} new, {dq} disqualified")
     json.dump(saved, open(ROOT / "data" / f"saved_{batch}.json", "w"),
               ensure_ascii=False, indent=1)
     return saved

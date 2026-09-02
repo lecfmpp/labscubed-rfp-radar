@@ -1,4 +1,12 @@
--- Aplicada em 2026-09-02 no projeto grozewxrymeiruhggcdy (LabsCubed // Claude).
--- Registo do que ja esta na base de dados; ver README para o contexto.
--- Tabelas: rfps, rfp_feedback, rfp_documents
--- RLS: labscubed_automation (ALL) + authenticated SELECT via portal.is_team()
+-- Applied 2026-09-02 to project grozewxrymeiruhggcdy (LabsCubed // Claude).
+-- Record of what is already live in the database; see README.md for context.
+--
+-- Tables:
+--   rfps           one row per tender procedure, unique(source, notice_id)
+--   rfp_documents  tender attachments per notice
+--   rfp_feedback   sales ratings used to recalibrate criteria.py weights
+--
+-- RLS follows the prospects/li_ads_daily convention:
+--   labscubed_automation  ALL     (GitHub Actions writes through the service key)
+--   authenticated         SELECT  via portal.is_team()
+--   authenticated         INSERT  on rfp_feedback via portal.is_team()

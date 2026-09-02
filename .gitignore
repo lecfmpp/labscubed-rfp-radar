@@ -1,7 +1,7 @@
 __pycache__/
 *.pyc
 dossiers/
-data/de_*.json
-data/ted_*.json
-data/saved_*.json
+reports/
+data/*.json
+!data/.gitkeep
 .env

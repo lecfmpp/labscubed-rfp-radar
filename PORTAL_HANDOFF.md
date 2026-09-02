@@ -1,53 +1,55 @@
-# Página `/rfp` do portal — o que falta
+# Portal `/rfp` page — what is left to build
 
-Tudo o resto está feito e a correr na cloud. Esta é a única peça que precisa de
-tocar no repo do portal.
+Everything else is done and running in the cloud. This is the only piece that touches
+the portal repo.
 
-## Dados: já estão prontos
+## The data is already there
 
-Três tabelas no projeto Supabase **LabsCubed // Claude** (`grozewxrymeiruhggcdy`),
-com o mesmo RLS de `prospects` — `labscubed_automation` escreve, `authenticated` lê
-via `portal.is_team()`. Não é preciso migração nenhuma.
+Three tables in the **LabsCubed // Claude** Supabase project (`grozewxrymeiruhggcdy`),
+with the same RLS as `prospects` — `labscubed_automation` writes, `authenticated` reads
+via `portal.is_team()`. No migration needed.
 
-- **`rfps`** — uma linha por procedimento. Campos-chave: `title`, `buyer`,
-  `buyer_country`, `score`, `tier` (HOT/WARM/COLD), `deadline`, `deadline_is_proxy`,
-  `value_eur`, `cpv[]`, `why_matched`, `disqualified`, `disqualification_reason`,
-  `status` (new/reviewing/bid/no_bid/submitted/won/lost), `url`, `summary`,
-  `timeline` (jsonb), `requirement_matrix` (jsonb), `proposal_skeleton`.
-- **`rfp_documents`** — anexos por edital (`rfp_id`, `filename`, `url`, `extracted_text`).
-- **`rfp_feedback`** — ratings do comercial (`rating` 1–5, `label`, `comment`).
+- **`rfps`** — one row per procedure. Key fields: `title`, `buyer`, `buyer_country`,
+  `score`, `tier` (HOT/WARM/COLD), `deadline`, `deadline_is_proxy`, `value_eur`,
+  `cpv[]`, `why_matched`, `disqualified`, `disqualification_reason`, `status`
+  (new/reviewing/bid/no_bid/submitted/won/lost), `url`, `summary`, `timeline` (jsonb),
+  `requirement_matrix` (jsonb), `proposal_skeleton`.
+- **`rfp_documents`** — attachments per notice (`rfp_id`, `filename`, `url`,
+  `extracted_text`).
+- **`rfp_feedback`** — sales ratings (`rating` 1–5, `label`, `comment`). SELECT and
+  INSERT are both open to team members.
 
-## O que a página precisa de ter
+## What the page needs
 
-**`/rfp` (lista)** — ordenada por `deadline` ascendente, HOT primeiro:
+**`/rfp` (list)** — sorted by `deadline` ascending, HOT first:
 
-| Coluna | Nota |
+| Column | Note |
 |---|---|
-| Título + comprador | link para o detalhe |
-| País | `buyer_country` |
-| Score + tier | chip colorido: HOT vermelho, WARM âmbar |
-| Prazo + dias restantes | ⚠️ se `deadline_is_proxy` for true, marcar como *não confirmado* |
-| Valor | `value_eur` |
-| Status | editável — é aqui que o comercial move para `bid`/`no_bid` |
+| Title + buyer | links to the detail page |
+| Country | `buyer_country` |
+| Score + tier | coloured chip: HOT red, WARM amber |
+| Deadline + days left | flag as *unconfirmed* when `deadline_is_proxy` is true |
+| Value | `value_eur` |
+| Status | editable — this is where sales moves a row to `bid` / `no_bid` |
 
-Filtros: tier, status, país, e um toggle **"mostrar desqualificados"** (por defeito
-escondidos, mas visíveis — a razão da desqualificação é informação útil).
+Filters: tier, status, country, and a **"show disqualified"** toggle — hidden by
+default, but reachable: the disqualification reason is useful information.
 
-**`/rfp/[id]` (detalhe)** — o que a tabela do Slack já liga:
-objeto, porque casou (`why_matched`), timeline, matriz de requisitos, anexos de
-`rfp_documents`, e um bloco para dar rating (escreve em `rfp_feedback`).
+**`/rfp/[id]` (detail)** — the destination the Slack table already links to:
+subject, why it matched (`why_matched`), timeline, requirement matrix, attachments
+from `rfp_documents`, and a rating block writing to `rfp_feedback`.
 
-## Duas coisas a não esquecer
+## Two things not to miss
 
-1. **`deadline_is_proxy`.** Quando é `true`, a data vem de `publicOpeningDate`, não do
-   prazo real de submissão — o export alemão não traz o BT-131. Mostrar como *a
-   confirmar*, nunca como facto. Planear em cima de uma data errada perde o edital.
-2. **`rfp_feedback` precisa de política de INSERT** para `authenticated`. Hoje só
-   existe SELECT — sem isso, o bloco de rating falha em silêncio.
+1. **`deadline_is_proxy`.** When it is `true` the date comes from `publicOpeningDate`,
+   not the real submission deadline — the German export does not carry BT-131. Show it
+   as *to be confirmed*, never as fact. Planning against a wrong date loses the tender.
+2. **Do not render `description`, `title` or `why_matched` as HTML.** They are buyer-authored
+   text pulled from public feeds. Escape them.
 
-## Depois de publicar
+## After publishing
 
-Definir a variable `PORTAL_BASE_URL` no repo `labscubed-rfp-radar`
-(Settings → Secrets and variables → Actions → Variables), ex.
-`https://portal.labscubed.com`. Sem ela, a tabela do Slack liga ao edital original
-em vez da página interna.
+Set the `PORTAL_BASE_URL` variable in the `labscubed-rfp-radar` repo
+(Settings → Secrets and variables → Actions → Variables), e.g.
+`https://portal.labscubed.com`. Without it the Slack table links to the original
+notice instead of the internal page.

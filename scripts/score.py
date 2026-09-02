@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Motor de pontuação partilhado pelas duas fontes (DE + TED)."""
+"""Scoring engine shared by both sources (Germany + TED)."""
 import re, sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 from criteria import *
@@ -14,21 +14,21 @@ def score_notice(title, description, cpvs):
     core  = {c for c in cpvs if c.startswith(CPV_CORE_PREFIX)}
     broad = {c for c in cpvs if c.startswith(CPV_BROAD_PREFIX)} - core
     if core:
-        pts += WEIGHTS["cpv_core"];  why.append(f"CPV core {sorted(core)}")
+        pts += WEIGHTS["cpv_core"];  why.append(f"core CPV {sorted(core)}")
     elif broad:
-        pts += WEIGHTS["cpv_broad"]; why.append(f"CPV amplo {sorted(broad)}")
+        pts += WEIGHTS["cpv_broad"]; why.append(f"broad CPV {sorted(broad)}")
 
-    hits_n = [k for k in KW_NORMS   if k in text]
-    hits_s = [k for k in KW_STRONG  if k in text]
-    hits_p = [k for k in KW_SUPPORT if k in text]
+    hits_n = [k for k in KW_NORMS    if k in text]
+    hits_s = [k for k in KW_STRONG   if k in text]
+    hits_p = [k for k in KW_SUPPORT  if k in text]
     hits_x = [k for k in KW_NEGATIVE if k in text]
 
-    if hits_n: pts += WEIGHTS["kw_norm"];   why.append(f"norma: {hits_n[:3]}")
-    if hits_s: pts += WEIGHTS["kw_strong"]; why.append(f"termo forte: {hits_s[:3]}")
-    if hits_p: pts += min(len(hits_p), 4) * WEIGHTS["kw_support"]; why.append(f"apoio: {hits_p[:4]}")
-    if hits_x: pts += WEIGHTS["negative"];  why.append(f"EXCLUSAO: {hits_x[:3]}")
+    if hits_n: pts += WEIGHTS["kw_norm"];   why.append(f"standard: {hits_n[:3]}")
+    if hits_s: pts += WEIGHTS["kw_strong"]; why.append(f"strong term: {hits_s[:3]}")
+    if hits_p: pts += min(len(hits_p), 4) * WEIGHTS["kw_support"]; why.append(f"supporting: {hits_p[:4]}")
+    if hits_x: pts += WEIGHTS["negative"];  why.append(f"EXCLUSION: {hits_x[:3]}")
 
-    # CPV amplo sozinho, sem nenhuma keyword, nao qualifica
+    # A broad CPV alone, with no keyword at all, does not qualify.
     if not (hits_n or hits_s) and not core:
         pts = min(pts, 25)
 
@@ -37,8 +37,8 @@ def score_notice(title, description, cpvs):
 
 
 def disqualify(title, description):
-    """Crivo tecnico: o edital e da nossa area mas cai fora do envelope.
-    Devolve (True, razao) ou (False, None)."""
+    """Technical screen: the notice is in our field but outside the envelope.
+    Returns (True, reason) or (False, None)."""
     text = norm(f"{title} {description}")
     for terms, reason in DISQUALIFIERS:
         hit = [t for t in terms if t in text]
@@ -47,9 +47,8 @@ def disqualify(title, description):
     for m in re.finditer(FORCE_RE, text):
         kn = int(m.group(1))
         if kn > MAX_KN:
-            return True, f"forca pedida {kn} kN excede o maximo de {MAX_KN} kN (CubeTen)"
-    if re.search(r"(\d{4,})\s*%", text):
-        for m in re.finditer(r"(\d{4,})\s*%", text):
-            if int(m.group(1)) > 1000:
-                return True, f"alongamento {m.group(1)}% excede o maximo de 1000%"
+            return True, f"requested force {kn} kN exceeds the {MAX_KN} kN maximum (CubeTen)"
+    for m in re.finditer(r"(\d{4,})\s*%", text):
+        if int(m.group(1)) > 1000:
+            return True, f"elongation {m.group(1)}% exceeds the 1000% maximum"
     return False, None
