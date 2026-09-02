@@ -1,85 +1,109 @@
 ---
 name: rfp-digest
-description: Post the daily RFP Radar digest to #rfp-agent. Reads today's tender notices from Supabase and publishes the table via the Slack connector. Runs weekdays at 07:15 UTC, after the GitHub Actions scan at 06:00.
+description: Post the daily RFP Radar digest to #rfp-agent. Reads today's tender notices straight from Supabase and publishes the table through the Slack connector. Runs weekdays at 07:15 UTC, after the GitHub Actions scan at 06:00. Needs no repo, no shell and no local machine.
 ---
 
 # RFP Digest
 
-Publishes the day's detected tender notices to `#rfp-agent`, in the same shape as the
-BDR Agent batch digest.
+Publishes the day's detected tender notices to `#rfp-agent` (`C0BUL9KGD52`), in the
+same shape as the BDR Agent batch digest.
 
-**This skill does not scan anything.** The scan runs on GitHub Actions
-(`lecfmpp/labscubed-rfp-radar`, weekdays 06:00 UTC) and writes to Supabase. This skill
-only reads what is already there and posts it. If the scan failed, say so — do not
-compose a digest from anything else.
+**This runs entirely on connectors — Supabase and Slack.** No repository, no Python,
+no shell, no local machine. The scan that produces the data runs separately on GitHub
+Actions (`lecfmpp/labscubed-rfp-radar`, weekdays 06:00 UTC) and writes to Supabase;
+this routine only reads what is there and posts it.
 
-## Prerequisites
+**Never invent a row.** If the queries come back empty or fail, say so in the channel.
+A fabricated tender wastes a salesperson's day.
 
-- Repo `lecfmpp/labscubed-rfp-radar` cloned locally.
-- Env: `SUPABASE_URL=https://grozewxrymeiruhggcdy.supabase.co` and
-  `SUPABASE_SERVICE_KEY` (the `service_role` key).
-- Optional: `PORTAL_BASE_URL` — once the portal `/rfp` page exists, the table links
-  there instead of to the original public notice.
-- Slack connector. **No bot, no app, no token** — the message posts as the user with
-  "Sent using @Claude", the same path as every other LabsCubed automation.
+## Step 1 — read the batch
 
-## Steps
+Supabase project `grozewxrymeiruhggcdy` (**LabsCubed // Claude**).
 
-1. **Render the message.** From the repo root:
+```sql
+select id, title, buyer, buyer_country, score, tier, deadline,
+       deadline_is_proxy, disqualified, disqualification_reason, url
+from rfps
+where batch_date = current_date
+order by score desc, deadline asc nulls last;
+```
 
-   ```bash
-   python3 scripts/slack_digest.py
-   ```
+```sql
+select * from rfp_batches where batch_date = current_date;
+```
 
-   It prints a ready-to-send markdown message and talks to Slack not at all. It reads
-   both the notices (`rfps`) and the funnel stats (`rfp_batches`) from Supabase, so it
-   works on any machine regardless of where the scan ran.
+If `rfp_batches` has no row for today, **the scan did not run.** Do not post a digest
+with zeroed numbers — report that in the channel and point at
+`lecfmpp/labscubed-rfp-radar` → Actions → RFP Radar.
 
-2. **Post it verbatim** to `#rfp-agent` (`C0BUL9KGD52`) with `slack_send_message`.
+## Step 2 — build the message
 
-   Do not rewrite, summarise, reorder or "improve" it. The formatting is deliberate
-   and matches the BDR Agent digest. In particular, do not touch the `|` characters —
-   `slack_send_message` converts the markdown table into a real Slack table.
+Post with `slack_send_message`. Keep the markdown table exactly as written; the
+connector converts it into a real Slack table. Do not escape the structural `|`.
 
-3. **Post even when it is empty.** If the message says no new opportunities, post it
-   anyway. A quiet day is a result: it tells the team the radar ran and found nothing,
-   which is different from the radar being broken. Those two must never look the same.
+```
+:satellite_antenna: _New RFP Batch — {today}_
+RFPs saved: _{total}_ · HOT (≥60): _{hot}_ · WARM: _{warm}_ · Disqualified: _{dq}_ · Avg score: _{avg}_ · Window: {days} days
 
-4. **Log the run** in Supabase `automation_runs`:
-   `project` = `rfp-radar`, `task` = `slack-digest`, `status`, `rows_affected` = the
-   number of notices posted.
+_Scanned {scanned} notices (DE Datenservice {scanned_de} + TED/EU {scanned_ted}) · CPV matched: {by_cpv} · full-text only: {by_fulltext} · new since last run: {new_rows}_
 
-## If something goes wrong
+:warning: _{n} with a deadline inside 14 days — decide bid/no-bid this week._
 
-- **The script errors.** Post the error to `#rfp-agent` and stop. Never invent rows or
-  reconstruct a digest from memory — a fabricated tender wastes a salesperson's day.
-- **No `rfp_batches` row for today.** The scan did not run. Check the Actions run
-  (`lecfmpp/labscubed-rfp-radar` → Actions → RFP Radar) and report that in the channel
-  rather than posting a digest with zeroed stats.
-- **The table renders as raw pipes.** Only happens in the draft composer, which does
-  not support markdown tables. On a real send it renders. If it ever fails on a real
-  send, re-run with `--format code` for a fixed-width block instead.
+| # | Notice | Buyer | Country | Score | Deadline | Left | Link |
+|---|---|---|---|---|---|---|---|
+| 1 | {title, 70 chars} | {buyer, 38 chars} | {buyer_country} | {score, no decimals} | {deadline}{⚠️ if proxy} | {days}d | [open]({link}) |
 
-## What the message contains
+_⚠️ = deadline is a proxy (public opening date); confirm on the notice page before planning._
 
-Header with the counts, a provenance line showing the funnel (how many notices were
-scanned, how many matched by CPV, how many only by full-text), a warning line if
-anything is inside 14 days, the table, and a footer.
+_{dq} disqualified by the technical screen ({first reason}) — see `rfps` ·_
+_full batch in Supabase `rfps` ·_ :satellite_antenna: _RFP Radar_
+```
 
-Two details worth understanding before you touch the output:
+Rules for filling it in:
 
-- **Disqualified notices are excluded from the table** and counted in the footer with
-  their reason. Disqualified means the notice is genuinely about materials testing but
-  falls outside the product envelope (>10 kN, metal/concrete, hardness/impact/fatigue).
-  That is different from not matching, and the team should still see it happened.
-- **A ⚠️ next to a deadline means the date is a proxy** — the public opening date, not
-  the real submission deadline, because the German export does not carry field BT-131.
-  Never present those dates as confirmed.
+- **Exclude `disqualified = true` rows from the table.** Count them in the footer with
+  the first reason. Disqualified means the notice really is about materials testing but
+  falls outside the product envelope (>10 kN, metal or concrete, hardness, impact,
+  fatigue). That is different from not matching, and the team should still see that it
+  happened and why.
+- **`Link`** is `{PORTAL_BASE_URL}/rfp/{id}` once the portal page exists; until then use
+  the row's `url`.
+- **`Left`** is days from today to `deadline`; `—` when there is no deadline,
+  `expired` when it has passed.
+- **Append ⚠️ to the deadline when `deadline_is_proxy` is true**, and include the
+  legend line. That date is the public opening date, not the real submission deadline —
+  the German export does not carry field BT-131. Never present it as confirmed.
+- Drop the `:warning:` line when nothing is inside 14 days, and the legend line when
+  nothing is a proxy.
+- If more than 25 rows survive, post the first 25 and continue in a thread reply, with
+  `…table continues in thread (26–{n}) · ` prefixed to the footer.
+
+## Step 3 — post even when it is empty
+
+If there are no new opportunities, replace the table with:
+
+```
+_No new opportunities within the criteria in this window._
+```
+
+and post it anyway. A quiet day is a result: it tells the team the radar ran and found
+nothing, which is different from the radar being broken. Those two must never look the
+same in the channel.
+
+## Step 4 — log the run
+
+Insert into `automation_runs`: `project` = `rfp-radar`, `task` = `slack-digest`,
+`status`, `rows_affected` = the number of notices posted, `completed_at` = now.
 
 ## Feedback loop
 
-When someone in the channel calls a result useless or says the radar missed something,
-record it in Supabase `rfp_feedback` (`rfp_id`, `rater_name`, `rating` 1-5, `label` one
-of `good` / `noise` / `missed`, `comment`). Those ratings are what recalibrate the
-scoring weights in `scripts/criteria.py`. Also log the exchange in `skill_learnings`
-with `task_id` = `rfp-digest`.
+When someone in the channel calls a result useless, or says the radar missed something,
+record it in `rfp_feedback` (`rfp_id`, `rater_name`, `rating` 1-5, `label` one of
+`good` / `noise` / `missed`, `comment`). Those ratings are what recalibrate the scoring
+weights. Log the exchange in `skill_learnings` with `task_id` = `rfp-digest`.
+
+## Note on the table
+
+If a draft ever shows raw `|` characters, that is the draft composer, which does not
+support markdown tables. Sent messages render correctly. Do not "fix" the formatting
+based on how a draft looks.
