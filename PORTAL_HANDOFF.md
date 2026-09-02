@@ -51,5 +51,5 @@ from `rfp_documents`, and a rating block writing to `rfp_feedback`.
 
 Set the `PORTAL_BASE_URL` variable in the `labscubed-rfp-radar` repo
 (Settings → Secrets and variables → Actions → Variables) to
-`https://labscubed.portal.ca/sales`. The digest then links to
+`https://portal.labscubed.ca/sales`. The digest then links to
 `{PORTAL_BASE_URL}/rfp/{id}`.

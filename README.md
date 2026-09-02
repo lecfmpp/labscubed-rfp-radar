@@ -37,7 +37,7 @@ Two secrets, both Supabase. Nothing for Slack.
 
 | Variable | Purpose |
 |---|---|
-| `PORTAL_BASE_URL` | `https://labscubed.portal.ca/sales` — the digest links to `{PORTAL_BASE_URL}/rfp/{id}`. Without it the Slack table falls back to the original public notice. |
+| `PORTAL_BASE_URL` | `https://portal.labscubed.ca/sales` — the digest links to `{PORTAL_BASE_URL}/rfp/{id}`. Without it the Slack table falls back to the original public notice. |
 
 The Slack side needs no configuration — the routine uses the connector that already
 exists. Channel: `#rfp-agent` (`C0BUL9KGD52`).

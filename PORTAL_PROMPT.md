@@ -5,12 +5,12 @@
 
 ---
 
-Build an **RFP** section in the portal at `https://labscubed.portal.ca/sales/rfp`,
+Build an **RFP** section in the portal at `https://portal.labscubed.ca/sales/rfp`,
 matching the existing branding, layout conventions and auth gating used by the other
 internal pages. Two routes: a list at `/sales/rfp` and a detail at `/sales/rfp/[id]`.
 
 The detail route is what the Slack digest links to, as
-`https://labscubed.portal.ca/sales/rfp/{rfps.id}` — keep that shape.
+`https://portal.labscubed.ca/sales/rfp/{rfps.id}` — keep that shape.
 
 ## The data already exists — do not create tables
 
