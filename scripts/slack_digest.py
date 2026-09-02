@@ -24,7 +24,14 @@ import json, os, sys, re, datetime, urllib.parse, urllib.request
 
 URL    = os.environ["SUPABASE_URL"].rstrip("/")
 KEY    = os.environ["SUPABASE_SERVICE_KEY"]
-PORTAL = os.environ.get("PORTAL_BASE_URL", "").rstrip("/")
+# Normalize whatever PORTAL_BASE_URL we were handed to the bare origin, then build
+# the hash route ourselves — so a link is a real SPA route (#/sales/rfp/<id>)
+# regardless of a stray "/sales" or a dropped "#" in the env/YAML.
+_PORTAL_RAW = os.environ.get("PORTAL_BASE_URL", "").strip()
+PORTAL = re.sub(r"/#.*$", "", _PORTAL_RAW)            # drop any hash route
+PORTAL = re.sub(r"/sales/?$", "", PORTAL).rstrip("/")  # tolerate a trailing /sales
+def portal_link(rfp_id):
+    return f"{PORTAL}/#/sales/rfp/{rfp_id}" if PORTAL else ""
 MAX_ROWS = 25          # the rest continues in the thread, like the BDR Agent does
 
 
@@ -92,31 +99,35 @@ def render(rows, stats, today, fmt="table"):
 
     shown = live[:MAX_ROWS]
     if shown and fmt == "code":
-        # Fixed-width block: renders the same everywhere, drafts included.
-        w = (3, 52, 30, 5, 6, 12, 6)
-        head = ("#", "Notice", "Buyer", "Ctry", "Score", "Deadline", "Left")
+        # Fixed-width block: renders the same everywhere. Kept narrow (no Buyer
+        # column — it's the widest and forces line-wrapping in Slack) so the grid
+        # stays aligned; the buyer is one click away in the portal.
+        w = (3, 46, 5, 6, 12, 6)
+        head = ("#", "Notice", "Ctry", "Fit", "Deadline", "Left")
         lines = ["  ".join(h.ljust(x) for h, x in zip(head, w)).rstrip(),
                  "  ".join("-" * x for x in w)]
         for i, r in enumerate(shown, 1):
             flag = "*" if r.get("deadline_is_proxy") and r.get("deadline") else ""
             lines.append("  ".join([
                 str(i).ljust(w[0]), esc(clean_title(r.get("title")))[:w[1]].ljust(w[1]),
-                (esc(r.get("buyer")) or "-")[:w[2]].ljust(w[2]),
-                (r.get("buyer_country") or "-").ljust(w[3]),
-                f"{float(r.get('score') or 0):.0f}".ljust(w[4]),
-                ((r.get("deadline") or "-")[:10] + flag).ljust(w[5]),
-                days_left(r.get("deadline"), today).ljust(w[6]),
+                (r.get("buyer_country") or "-").ljust(w[2]),
+                f"{float(r.get('score') or 0):.0f} {r.get('tier') or ''}".strip().ljust(w[3]),
+                ((r.get("deadline") or "-")[:10] + flag).ljust(w[4]),
+                days_left(r.get("deadline"), today).ljust(w[5]),
             ]).rstrip())
         out += ["```", *lines, "```", ""]
-        for i, r in enumerate(shown, 1):
-            link = f"{PORTAL}/rfp/{r['id']}" if PORTAL else (r.get("url") or "")
-            if link: out.append(f"{i}. <{link}|{esc(clean_title(r.get('title')))[:60]}>")
-        out.append("")
+        # One compact line of numbered links (matching the rows) — no repeated titles.
+        links = "   ".join(f"<{portal_link(r['id']) or r.get('url') or ''}|[{i}]>"
+                           for i, r in enumerate(shown, 1) if (portal_link(r['id']) or r.get('url')))
+        if links:
+            out += [f":link: *Open in portal:*  {links}", ""]
+        if any(r.get("deadline_is_proxy") and r.get("deadline") for r in shown):
+            out += ["_* = deadline is a proxy (public opening date); confirm on the notice page before planning._", ""]
     elif shown:
         out += ["| # | Notice | Buyer | Country | Score | Deadline | Left | Link |",
                 "|---|---|---|---|---|---|---|---|"]
         for i, r in enumerate(shown, 1):
-            link = f"{PORTAL}/rfp/{r['id']}" if PORTAL else (r.get("url") or "")
+            link = portal_link(r['id']) or (r.get("url") or "")
             cell = f"[open]({link})" if link else "—"
             flag = " ⚠️" if r.get("deadline_is_proxy") and r.get("deadline") else ""
             out.append(
@@ -211,7 +222,7 @@ def render_blocks(rows, stats, today):
     shown = live[:15]   # Block Kit tops out at 50 blocks; the rest is in the portal
     for i, r in enumerate(shown, 1):
         title = clean_title(r.get("title"))[:140]
-        link  = f"{PORTAL}/rfp/{r['id']}" if PORTAL else (r.get("url") or "")
+        link  = portal_link(r['id']) or (r.get("url") or "")
         sec = {
             "type": "section",
             "text": {"type": "mrkdwn", "text": f"*{i}. {title}*"},
