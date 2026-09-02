@@ -5,11 +5,19 @@ EU, qualifies them against the product envelope, writes them to Supabase and pos
 table to `#rfp-agent`. **Runs entirely on GitHub Actions** — no local machine involved.
 
 ```
-GitHub Actions (cron 06:00 UTC, weekdays)
+GitHub Actions (cron 06:00 UTC, weekdays)     — deterministic, no model, no Slack
   └─ radar.py             scan DE Datenservice + TED/EU, score, write the batch
      └─ push_supabase.py  upsert into `rfps`, log to `automation_runs`
-        └─ slack_post.py  table in #rfp-agent, NEW notices only
+
+Claude routine (07:15 UTC, weekdays)          — see ROUTINE.md
+  └─ slack_digest.py      render markdown → posted via the Slack connector
 ```
+
+**There is no Slack bot, app or token anywhere in this repo.** The digest is posted
+by a scheduled Claude routine through the Slack connector, so it appears as the user
+with "Sent using @Claude" — the same path as the BDR Agent and every other LabsCubed
+automation. `slack_digest.py` only prints markdown to stdout; it talks to Slack not
+at all.
 
 There is no state file and nothing is written back to the repo. What has already been
 seen lives in the `unique(source, notice_id)` constraint on the `rfps` table.
@@ -20,10 +28,10 @@ seen lives in the `unique(source, notice_id)` constraint on the `rfps` table.
 
 | Secret | Where to get it |
 |---|---|
-| `SUPABASE_URL` | Supabase → Project Settings → API → Project URL |
-| `SUPABASE_SERVICE_KEY` | same page → `service_role` key |
-| `SLACK_BOT_TOKEN` | Slack app → OAuth & Permissions → Bot token (`xoxb-…`), scope `chat:write` |
-| `SLACK_CHANNEL_ID` | `C0BUL9KGD52` (#rfp-agent) |
+| `SUPABASE_URL` | `https://grozewxrymeiruhggcdy.supabase.co` |
+| `SUPABASE_SERVICE_KEY` | Supabase → Project Settings → API Keys → `service_role` |
+
+Two secrets, both Supabase. Nothing for Slack.
 
 **Variable** (same screen, Variables tab):
 
@@ -31,7 +39,8 @@ seen lives in the `unique(source, notice_id)` constraint on the `rfps` table.
 |---|---|
 | `PORTAL_BASE_URL` | portal origin, e.g. `https://portal.labscubed.com`. Without it the Slack table links to the original notice instead of the internal page. |
 
-The Slack bot must be invited to the channel: `/invite @<bot>` in `#rfp-agent`.
+The Slack side needs no configuration — the routine uses the connector that already
+exists. Channel: `#rfp-agent` (`C0BUL9KGD52`).
 
 ## Running it manually
 
@@ -39,6 +48,7 @@ Actions → **RFP Radar** → *Run workflow* (takes the window in days).
 
 ```bash
 python3 scripts/radar.py --days 3          # scan only, writes reports/radar_<date>.md
+python3 scripts/slack_digest.py            # print the Slack message (posts nothing)
 python3 scripts/dossier.py 588408-2026     # full dossier for one notice (TED)
 python3 scripts/dossier.py 25763636        # full dossier for one notice (Germany)
 ```
