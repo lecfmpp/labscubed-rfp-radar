@@ -16,6 +16,9 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
+    # The German export refuses connections from some cloud IP ranges. Retries
+    # are bounded, but cap the job so a bad day can never hang for 20 minutes.
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v7
 

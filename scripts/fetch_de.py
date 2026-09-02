@@ -10,18 +10,33 @@ from score import score_notice
 BASE = "https://oeffentlichevergabe.de/api/notice-exports"
 UA = {"User-Agent": "LabsCubed-RFP-Radar/1.0 (leandro@labscubed.com)"}
 
-def fetch(period):
+def fetch(period, attempts=4, timeout=75):
+    """The export sometimes refuses connections from cloud runners (GitHub's
+    Azure ranges in particular), so retry with backoff and fail fast rather
+    than hanging the job on a long socket timeout."""
+    import time
     key = "pubMonth" if len(period) == 7 else "pubDay"
     url = f"{BASE}?{key}={period}&format=csv.zip"
-    req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=180) as r:
-        return zipfile.ZipFile(io.BytesIO(r.read()))
+    last = None
+    for a in range(attempts):
+        try:
+            req = urllib.request.Request(url, headers=UA)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return zipfile.ZipFile(io.BytesIO(r.read()))
+        except Exception as e:
+            last = e
+            if a < attempts - 1:
+                time.sleep(3 * (a + 1))
+    raise last
 
 def rows(z, name):
     with z.open(name) as f:
         yield from csv.DictReader(io.TextIOWrapper(f, "utf-8"))
 
-def run(period):
+def run(period, since=None):
+    """`period` is YYYY-MM-DD or YYYY-MM. `since` (a YYYY-MM-DD string) keeps
+    only notices published on or after that date, so one monthly export can
+    serve a multi-day window in a single request instead of one per day."""
     z = fetch(period)
     notices = {r["noticeIdentifier"]: r for r in rows(z, "notice.csv")}
 
@@ -59,8 +74,12 @@ def run(period):
     # OPEN opportunities only: competition and planning (prior information).
     # Excludes result/can-* (already awarded) and cont-modif (contract change).
     OPEN = {"competition", "change", "planning"}
+    # Count only what the window actually covers, not the whole monthly export -
+    # the digest reports this number as "notices scanned".
+    in_window = {nid: n for nid, n in notices.items()
+                 if not since or (n.get("publicationDate") or "")[:10] >= since}
     out = []
-    for nid, n in notices.items():
+    for nid, n in in_window.items():
         if n.get("formType") not in OPEN: continue
         t = texts.get(nid, {"title": set(), "desc": set()})
         title = " | ".join(sorted(t["title"]))[:400]
@@ -85,7 +104,7 @@ def run(period):
         k = r["procedure"] or r["id"]
         if k in seen: continue
         seen.add(k); dedup.append(r)
-    return dedup, len(notices)
+    return dedup, len(in_window)
 
 if __name__ == "__main__":
     period = sys.argv[1]

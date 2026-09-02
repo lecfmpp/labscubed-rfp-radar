@@ -20,16 +20,24 @@ def main(days=3):
     stats = {"days": days, "scanned": 0, "scanned_de": 0, "scanned_ted": 0,
              "by_cpv": 0, "by_fulltext": 0}
 
-    # --- Germany: one export per day in the window --------------------
-    for i in range(days):
-        d = (today - datetime.timedelta(days=i)).isoformat()
+    # --- Germany: one monthly export per month the window touches -------
+    # One request instead of one per day. The export refuses connections from
+    # some cloud IP ranges, so every extra request is another chance to fail.
+    since = (today - datetime.timedelta(days=days - 1)).isoformat()
+    months, d = [], today - datetime.timedelta(days=days - 1)
+    while d <= today:
+        m = d.strftime("%Y-%m")
+        if m not in months: months.append(m)
+        d += datetime.timedelta(days=1)
+    for m in months:
         try:
-            r, tot = fetch_de.run(d)
+            r, tot = fetch_de.run(m, since=since)
             rows += r; stats["scanned_de"] += tot
-            print(f"  DE {d}: {tot} notices -> {len(r)} qualified", file=sys.stderr)
+            print(f"  DE {m} (since {since}): {tot} notices -> {len(r)} qualified",
+                  file=sys.stderr)
         except Exception as e:
-            # The current day's export does not exist yet (HTTP 400) - expected.
-            print(f"  DE {d}: skipped ({e})", file=sys.stderr)
+            print(f"  DE {m}: FAILED ({e})", file=sys.stderr)
+            stats.setdefault("source_errors", []).append(f"DE {m}: {e}")
 
     # --- EU / TED -----------------------------------------------------
     try:
