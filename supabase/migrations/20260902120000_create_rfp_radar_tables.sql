@@ -1,0 +1,4 @@
+-- Aplicada em 2026-09-02 no projeto grozewxrymeiruhggcdy (LabsCubed // Claude).
+-- Registo do que ja esta na base de dados; ver README para o contexto.
+-- Tabelas: rfps, rfp_feedback, rfp_documents
+-- RLS: labscubed_automation (ALL) + authenticated SELECT via portal.is_team()

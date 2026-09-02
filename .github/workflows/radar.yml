@@ -1,0 +1,46 @@
+name: RFP Radar
+
+on:
+  schedule:
+    - cron: "0 6 * * 1-5"        # 06:00 UTC, dias uteis (07:00/08:00 em Berlim)
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Janela em dias"
+        default: "3"
+
+concurrency:
+  group: rfp-radar              # nunca duas corridas em paralelo (seen.json e estado)
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Varrer as fontes (DE + TED/UE)
+        run: python3 scripts/radar.py --days "${{ inputs.days || '3' }}"
+
+      - name: Gravar no Supabase
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          STAMP=$(date -u +%F)
+          python3 scripts/push_supabase.py "data/radar_${STAMP}.json"
+
+      - name: Publicar em #rfp-agent
+        env:
+          SLACK_BOT_TOKEN:  ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          PORTAL_BASE_URL:  ${{ vars.PORTAL_BASE_URL }}
+        run: |
+          STAMP=$(date -u +%F)
+          python3 scripts/slack_post.py "data/saved_${STAMP}.json" --stats "data/stats_${STAMP}.json"
