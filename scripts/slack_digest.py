@@ -7,7 +7,11 @@ POSTS the digest to #rfp-agent itself — this is how the GitHub Actions run
 publishes, with no local machine. With neither set it just prints to stdout, so
 a Claude connector or a human can post the same message (the original path).
 
-   python3 scripts/slack_digest.py [--date 2026-09-02] [--format table|code]
+   python3 scripts/slack_digest.py [--date 2026-09-02] [--format blocks|table|code]
+
+--format blocks (used by GitHub Actions) sends a native Slack table block:
+a real table with clickable cells, and no duplicate link list underneath.
+Falls back to the code block automatically if Slack refuses the blocks.
 
 --format table (default) uses a markdown table, which the Slack CONNECTOR renders
 as a real table. A bot/webhook post does NOT render markdown tables, so the
@@ -124,7 +128,75 @@ def render(rows, stats, today, fmt="table"):
     return "\n".join(out)
 
 
-def post_slack(text):
+def cell(t):
+    return {"type": "raw_text", "text": str(t)[:180]}
+
+
+def link_cell(url, label):
+    return {"type": "rich_text", "elements": [{"type": "rich_text_section",
+            "elements": [{"type": "link", "url": url, "text": label}]}]}
+
+
+def build_blocks(rows, stats, today):
+    """Native Slack table block: a real table, with clickable cells.
+    Supported by chat.postMessage and by incoming webhooks; max 100 rows x 20
+    columns. post_slack falls back to the code-block text if Slack refuses it."""
+    hot  = [r for r in rows if r["tier"] == "HOT"]
+    warm = [r for r in rows if r["tier"] == "WARM"]
+    dq   = [r for r in rows if r.get("disqualified")]
+    live = [r for r in rows if not r.get("disqualified")]
+    avg  = (sum(float(r["score"]) for r in rows) / len(rows)) if rows else 0
+    soon = [r for r in live if r.get("deadline")
+            and 0 <= (datetime.date.fromisoformat(r["deadline"][:10]) - today).days <= 14]
+
+    def sect(t): return {"type": "section", "text": {"type": "mrkdwn", "text": t}}
+
+    blocks = [sect(
+        f":satellite_antenna: *New RFP Batch — {today}*\n"
+        f"RFPs saved: *{len(rows)}*  ·  HOT (≥60): *{len(hot)}*  ·  WARM: *{len(warm)}*  ·  "
+        f"Disqualified: *{len(dq)}*  ·  Avg score: *{avg:.1f}*  ·  Window: {stats.get('days', 3)} days"),
+        {"type": "context", "elements": [{"type": "mrkdwn", "text":
+            f"Scanned {stats.get('scanned', 0):,} notices "
+            f"(DE Datenservice {stats.get('scanned_de', 0):,} + TED/EU {stats.get('scanned_ted', 0):,})  ·  "
+            f"CPV matched: {stats.get('by_cpv', 0)}  ·  full-text only: {stats.get('by_fulltext', 0)}"}]}]
+    if soon:
+        blocks.append(sect(f":warning: *{len(soon)}* with a deadline inside 14 days — "
+                           "decide bid/no-bid this week."))
+    if live:
+        head = ["#", "Notice", "Buyer", "Country", "Score", "Deadline", "Left"]
+        trs = [[cell(h) for h in head]]
+        for i, r in enumerate(live[:MAX_ROWS], 1):
+            url = f"{PORTAL}/rfp/{r['id']}" if PORTAL else (r.get("url") or "")
+            flag = " (proxy)" if r.get("deadline_is_proxy") and r.get("deadline") else ""
+            title = (r.get("title") or "")[:70]
+            trs.append([
+                cell(i),
+                link_cell(url, title) if url else cell(title),
+                cell((r.get("buyer") or "-")[:38]),
+                cell(r.get("buyer_country") or "-"),
+                cell(f"{float(r.get('score') or 0):.0f}"),
+                cell((r.get("deadline") or "-")[:10] + flag),
+                cell(days_left(r.get("deadline"), today)),
+            ])
+        blocks.append({"type": "table", "rows": trs})
+        if any(r.get("deadline_is_proxy") and r.get("deadline") for r in live[:MAX_ROWS]):
+            blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text":
+                "(proxy) = public opening date, not the confirmed submission deadline — "
+                "verify on the notice page before planning."}]})
+    else:
+        blocks.append(sect("_No new opportunities within the criteria in this window._"))
+
+    foot = "full batch in Supabase `rfps`  ·  :satellite_antenna: RFP Radar"
+    if dq:
+        foot = (f"{len(dq)} disqualified by the technical screen "
+                f"({(dq[0].get('disqualification_reason') or '')[:60]})  ·  ") + foot
+    if len(live) > MAX_ROWS:
+        foot = f"showing {MAX_ROWS} of {len(live)}  ·  " + foot
+    blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": foot}]})
+    return blocks
+
+
+def post_slack(text, blocks=None):
     """Post `text` to Slack when running unattended (GitHub Actions).
     Prefers a bot token (chat.postMessage), else an incoming webhook. Returns
     True if a post was attempted. With neither set, the caller prints instead —
@@ -132,23 +204,44 @@ def post_slack(text):
     token   = os.environ.get("SLACK_BOT_TOKEN")
     channel = os.environ.get("SLACK_CHANNEL", "C0BUL9KGD52")   # #rfp-agent
     webhook = os.environ.get("SLACK_WEBHOOK_URL")
+    def payload(with_blocks):
+        p = {"text": text, "unfurl_links": False, "unfurl_media": False}
+        if token: p["channel"] = channel
+        if with_blocks and blocks: p["blocks"] = blocks
+        return json.dumps(p).encode()
+
     if token:
-        body = json.dumps({"channel": channel, "text": text,
-                           "unfurl_links": False, "unfurl_media": False}).encode()
+        body = payload(True)
         req = urllib.request.Request("https://slack.com/api/chat.postMessage", data=body,
             headers={"Authorization": f"Bearer {token}",
                      "Content-Type": "application/json; charset=utf-8"})
         with urllib.request.urlopen(req, timeout=30) as r:
             resp = json.load(r)
+        if not resp.get("ok") and blocks:          # table block refused: plain text
+            print(f"[slack] blocks refused ({resp.get('error')}), retrying as text",
+                  file=sys.stderr)
+            req = urllib.request.Request("https://slack.com/api/chat.postMessage",
+                data=payload(False),
+                headers={"Authorization": f"Bearer {token}",
+                         "Content-Type": "application/json; charset=utf-8"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                resp = json.load(r)
         if not resp.get("ok"):
             raise RuntimeError("Slack chat.postMessage failed: " + str(resp.get("error")))
         return True
     if webhook:
-        req = urllib.request.Request(webhook, data=json.dumps({"text": text}).encode(),
-            headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            r.read()
-        return True
+        for with_blocks in ((True, False) if blocks else (False,)):
+            try:
+                req = urllib.request.Request(webhook, data=payload(with_blocks),
+                    headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    r.read()
+                return True
+            except Exception as e:
+                if with_blocks:
+                    print(f"[slack] blocks refused ({e}), retrying as text", file=sys.stderr)
+                    continue
+                raise
     return False
 
 
@@ -177,14 +270,18 @@ def main(date=None, fmt="table"):
     stats = batch[0] if batch else {}
     # Never invent a row: no batch today means the scan did not run — say so
     # instead of posting a zeroed digest that looks like a real quiet day.
+    blocks = None
     if batch:
         msg = render(rows, stats, today, fmt)
+        if fmt == "blocks":
+            msg = render(rows, stats, today, "code")   # text fallback for notifications
+            blocks = build_blocks(rows, stats, today)
     else:
         msg = (f":satellite_antenna: _RFP Radar — {today}_\n"
                "_No batch recorded for today — the 06:00 UTC scan may not have run. "
                "Check `lecfmpp/labscubed-rfp-radar` → Actions → RFP Radar._")
     live_n = len([r for r in rows if not r.get("disqualified")])
-    if post_slack(msg):
+    if post_slack(msg, blocks):
         log_run("success" if batch else "partial", live_n,
                 "posted digest" if batch else "no batch for today")
         print(f"[slack] posted ({live_n} notices)", file=sys.stderr)

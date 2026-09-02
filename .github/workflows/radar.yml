@@ -54,4 +54,4 @@ jobs:
           # Booleans only - never echo the secret itself.
           echo "SLACK_WEBHOOK_URL present: ${{ secrets.SLACK_WEBHOOK_URL != '' }}"
           echo "SLACK_BOT_TOKEN present:   ${{ secrets.SLACK_BOT_TOKEN != '' }}"
-          python3 scripts/slack_digest.py --format code
+          python3 scripts/slack_digest.py --format blocks
