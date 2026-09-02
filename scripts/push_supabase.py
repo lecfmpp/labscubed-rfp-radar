@@ -70,6 +70,18 @@ def main(path):
             ids = ",".join(f'"{r["notice_id"]}"' for r in fresh)
             saved = rest("GET", f"rfps?select=*&notice_id=in.({ids})")
     dq = sum(1 for r in rows if r["disqualified"])
+
+    # Funnel stats go to the DB, not a file: the Slack digest is rendered by a
+    # Claude routine on a different machine, which never sees the runner's disk.
+    stats_path = ROOT / "data" / f"stats_{batch}.json"
+    stats = json.load(open(stats_path)) if stats_path.exists() else {}
+    rest("POST", "rfp_batches?on_conflict=batch_date", [{
+        "batch_date": batch,
+        "days": stats.get("days"), "scanned": stats.get("scanned", 0),
+        "scanned_de": stats.get("scanned_de", 0), "scanned_ted": stats.get("scanned_ted", 0),
+        "by_cpv": stats.get("by_cpv", 0), "by_fulltext": stats.get("by_fulltext", 0),
+        "qualified": len(rows), "new_rows": len(fresh), "disqualified": dq,
+    }], prefer="resolution=merge-duplicates,return=minimal")
     rest("POST", "automation_runs", [{
         "project": "rfp-radar", "task": "daily-scan",
         "started_at": started,

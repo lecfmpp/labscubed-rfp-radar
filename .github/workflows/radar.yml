@@ -34,10 +34,3 @@ jobs:
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python3 scripts/push_supabase.py "data/radar_$(date -u +%F).json"
-
-      - name: Keep the batch stats for the digest
-        uses: actions/upload-artifact@v4
-        with:
-          name: radar-stats
-          path: data/stats_*.json
-          retention-days: 7

@@ -14,7 +14,8 @@ draft will show raw pipes even though the sent message renders correctly.
 --format code emits a fixed-width code block instead: renders identically
 everywhere, including drafts, at the cost of not being clickable.
 
-Reads Supabase directly so the routine can post even if the scan ran hours earlier.
+Reads Supabase directly - both the rows and the funnel stats - so the routine can
+run on any machine, hours after the scan, with no shared filesystem.
 Env: SUPABASE_URL, SUPABASE_SERVICE_KEY, PORTAL_BASE_URL (optional)
 """
 import json, os, sys, datetime, urllib.parse, urllib.request
@@ -127,9 +128,8 @@ def main(date=None, fmt="table"):
         "select": "*", "batch_date": f"eq.{today.isoformat()}",
         "order": "score.desc,deadline.asc"})
     rows = rest(f"rfps?{q}")
-    stats = {}
-    p = f"data/stats_{today.isoformat()}.json"
-    if os.path.exists(p): stats = json.load(open(p))
+    batch = rest(f"rfp_batches?batch_date=eq.{today.isoformat()}&select=*")
+    stats = batch[0] if batch else {}
     print(render(rows, stats, today, fmt))
 
 
