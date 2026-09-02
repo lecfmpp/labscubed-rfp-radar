@@ -2,21 +2,23 @@
 # -*- coding: utf-8 -*-
 """Render the daily batch as a Slack-ready markdown message and print it to stdout.
 
-This script does NOT talk to Slack. Posting is done by the Claude routine through
-the Slack connector (same path as the BDR Agent: the message appears as the user,
-"Sent using @Claude"), so no bot, no app and no token are needed anywhere.
+If a Slack credential is set (SLACK_WEBHOOK_URL or SLACK_BOT_TOKEN), the script
+POSTS the digest to #rfp-agent itself — this is how the GitHub Actions run
+publishes, with no local machine. With neither set it just prints to stdout, so
+a Claude connector or a human can post the same message (the original path).
 
    python3 scripts/slack_digest.py [--date 2026-09-02] [--format table|code]
 
---format table (default) uses a markdown table, which slack_send_message converts
-into a real Slack table. NOTE: the draft composer does NOT convert tables, so a
-draft will show raw pipes even though the sent message renders correctly.
+--format table (default) uses a markdown table, which the Slack CONNECTOR renders
+as a real table. A bot/webhook post does NOT render markdown tables, so the
+GitHub Actions step calls --format code.
 --format code emits a fixed-width code block instead: renders identically
-everywhere, including drafts, at the cost of not being clickable.
+everywhere (bot, webhook, draft), at the cost of the table cells not being links.
 
-Reads Supabase directly - both the rows and the funnel stats - so the routine can
-run on any machine, hours after the scan, with no shared filesystem.
-Env: SUPABASE_URL, SUPABASE_SERVICE_KEY, PORTAL_BASE_URL (optional)
+Reads Supabase directly - both the rows and the funnel stats - so it can run on
+any machine, hours after the scan, with no shared filesystem.
+Env: SUPABASE_URL, SUPABASE_SERVICE_KEY, PORTAL_BASE_URL (optional),
+     SLACK_WEBHOOK_URL or SLACK_BOT_TOKEN (+ SLACK_CHANNEL, default #rfp-agent)
 """
 import json, os, sys, datetime, urllib.parse, urllib.request
 
@@ -122,6 +124,49 @@ def render(rows, stats, today, fmt="table"):
     return "\n".join(out)
 
 
+def post_slack(text):
+    """Post `text` to Slack when running unattended (GitHub Actions).
+    Prefers a bot token (chat.postMessage), else an incoming webhook. Returns
+    True if a post was attempted. With neither set, the caller prints instead —
+    so a human/Claude connector can still post the same message."""
+    token   = os.environ.get("SLACK_BOT_TOKEN")
+    channel = os.environ.get("SLACK_CHANNEL", "C0BUL9KGD52")   # #rfp-agent
+    webhook = os.environ.get("SLACK_WEBHOOK_URL")
+    if token:
+        body = json.dumps({"channel": channel, "text": text,
+                           "unfurl_links": False, "unfurl_media": False}).encode()
+        req = urllib.request.Request("https://slack.com/api/chat.postMessage", data=body,
+            headers={"Authorization": f"Bearer {token}",
+                     "Content-Type": "application/json; charset=utf-8"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            resp = json.load(r)
+        if not resp.get("ok"):
+            raise RuntimeError("Slack chat.postMessage failed: " + str(resp.get("error")))
+        return True
+    if webhook:
+        req = urllib.request.Request(webhook, data=json.dumps({"text": text}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            r.read()
+        return True
+    return False
+
+
+def log_run(status, rows_affected, note=""):
+    """Best-effort automation_runs insert; never fail the job on logging."""
+    try:
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        body = json.dumps([{"project": "rfp-radar", "task": "slack-digest",
+            "status": status, "rows_affected": rows_affected,
+            "notes": note or None, "started_at": now, "completed_at": now}]).encode()
+        req = urllib.request.Request(f"{URL}/rest/v1/automation_runs", data=body,
+            headers={"apikey": KEY, "Authorization": f"Bearer {KEY}",
+                     "Content-Type": "application/json", "Prefer": "return=minimal"})
+        urllib.request.urlopen(req, timeout=30).read()
+    except Exception as e:
+        print("automation_runs log failed:", e, file=sys.stderr)
+
+
 def main(date=None, fmt="table"):
     today = datetime.date.fromisoformat(date) if date else datetime.date.today()
     q = urllib.parse.urlencode({
@@ -130,7 +175,20 @@ def main(date=None, fmt="table"):
     rows = rest(f"rfps?{q}")
     batch = rest(f"rfp_batches?batch_date=eq.{today.isoformat()}&select=*")
     stats = batch[0] if batch else {}
-    print(render(rows, stats, today, fmt))
+    # Never invent a row: no batch today means the scan did not run — say so
+    # instead of posting a zeroed digest that looks like a real quiet day.
+    if batch:
+        msg = render(rows, stats, today, fmt)
+    else:
+        msg = (f":satellite_antenna: _RFP Radar — {today}_\n"
+               "_No batch recorded for today — the 06:00 UTC scan may not have run. "
+               "Check `lecfmpp/labscubed-rfp-radar` → Actions → RFP Radar._")
+    live_n = len([r for r in rows if not r.get("disqualified")])
+    if post_slack(msg):
+        log_run("success" if batch else "partial", live_n,
+                "posted digest" if batch else "no batch for today")
+    else:
+        print(msg)   # no Slack creds: print so a connector/human can post it
 
 
 if __name__ == "__main__":
