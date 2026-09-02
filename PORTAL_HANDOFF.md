@@ -1,4 +1,4 @@
-# Portal `/rfp` page — what is left to build
+# Portal `/sales/rfp` page — what is left to build
 
 Everything else is done and running in the cloud. This is the only piece that touches
 the portal repo.
@@ -21,7 +21,7 @@ via `portal.is_team()`. No migration needed.
 
 ## What the page needs
 
-**`/rfp` (list)** — sorted by `deadline` ascending, HOT first:
+**`/sales/rfp` (list)** — sorted by `deadline` ascending, HOT first:
 
 | Column | Note |
 |---|---|
@@ -35,7 +35,7 @@ via `portal.is_team()`. No migration needed.
 Filters: tier, status, country, and a **"show disqualified"** toggle — hidden by
 default, but reachable: the disqualification reason is useful information.
 
-**`/rfp/[id]` (detail)** — the destination the Slack table already links to:
+**`/sales/rfp/[id]` (detail)** — the destination the Slack table already links to:
 subject, why it matched (`why_matched`), timeline, requirement matrix, attachments
 from `rfp_documents`, and a rating block writing to `rfp_feedback`.
 
@@ -50,6 +50,6 @@ from `rfp_documents`, and a rating block writing to `rfp_feedback`.
 ## After publishing
 
 Set the `PORTAL_BASE_URL` variable in the `labscubed-rfp-radar` repo
-(Settings → Secrets and variables → Actions → Variables), e.g.
-`https://portal.labscubed.com`. Without it the Slack table links to the original
-notice instead of the internal page.
+(Settings → Secrets and variables → Actions → Variables) to
+`https://labscubed.portal.ca/sales`. The digest then links to
+`{PORTAL_BASE_URL}/rfp/{id}`.

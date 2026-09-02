@@ -5,9 +5,12 @@
 
 ---
 
-Build an **RFP** section in the portal, matching the existing branding, layout
-conventions and auth gating used by the other internal pages. Two routes: a list at
-`/rfp` and a detail at `/rfp/[id]`.
+Build an **RFP** section in the portal at `https://labscubed.portal.ca/sales/rfp`,
+matching the existing branding, layout conventions and auth gating used by the other
+internal pages. Two routes: a list at `/sales/rfp` and a detail at `/sales/rfp/[id]`.
+
+The detail route is what the Slack digest links to, as
+`https://labscubed.portal.ca/sales/rfp/{rfps.id}` — keep that shape.
 
 ## The data already exists — do not create tables
 
@@ -45,7 +48,7 @@ is needed.
 `rfp_documents`: `rfp_id`, `filename`, `url`, `mime`, `bytes`, `extracted_text`.
 `rfp_feedback`: `rfp_id`, `rater_name`, `rating` (1–5), `label`, `comment`.
 
-## `/rfp` — the list
+## `/sales/rfp` — the list
 
 Default view: `disqualified = false`, sorted by `tier` (HOT first) then `deadline`
 ascending. This is a work queue, not an archive — the thing nearest its deadline is
@@ -66,7 +69,7 @@ it tells the team the radar considered something and why it ruled it out.
 Empty state: say the radar ran and found nothing new, not "no data". A quiet day and
 a broken pipeline must not look the same.
 
-## `/rfp/[id]` — the detail
+## `/sales/rfp/[id]` — the detail
 
 This is where the Slack digest links to. Sections, in this order:
 

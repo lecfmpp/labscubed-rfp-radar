@@ -66,8 +66,8 @@ Rules for filling it in:
   falls outside the product envelope (>10 kN, metal or concrete, hardness, impact,
   fatigue). That is different from not matching, and the team should still see that it
   happened and why.
-- **`Link`** is `{PORTAL_BASE_URL}/rfp/{id}` once the portal page exists; until then use
-  the row's `url`.
+- **`Link`** is `https://labscubed.portal.ca/sales/rfp/{id}` once the portal page is
+  live; until then use the row's `url`.
 - **`Left`** is days from today to `deadline`; `—` when there is no deadline,
   `expired` when it has passed.
 - **Append ⚠️ to the deadline when `deadline_is_proxy` is true**, and include the
