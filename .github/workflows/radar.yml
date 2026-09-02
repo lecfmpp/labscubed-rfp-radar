@@ -2,22 +2,20 @@ name: RFP Radar
 
 on:
   schedule:
-    - cron: "0 6 * * 1-5"        # 06:00 UTC, dias uteis (07:00/08:00 em Berlim)
+    - cron: "0 6 * * 1-5"        # 06:00 UTC, weekdays (07:00/08:00 Berlin)
   workflow_dispatch:
     inputs:
       days:
-        description: "Janela em dias"
+        description: "Window in days"
         default: "3"
 
 concurrency:
-  group: rfp-radar              # nunca duas corridas em paralelo (seen.json e estado)
+  group: rfp-radar
   cancel-in-progress: false
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -25,22 +23,21 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Varrer as fontes (DE + TED/UE)
+      # Scan both sources and score. Pure Python, no model, no credentials.
+      - name: Scan sources (Germany + TED/EU)
         run: python3 scripts/radar.py --days "${{ inputs.days || '3' }}"
 
-      - name: Gravar no Supabase
+      # Upsert into `rfps`. Slack is NOT posted from here: the Claude routine
+      # posts through the Slack connector, so no bot or token is ever needed.
+      - name: Write to Supabase
         env:
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: |
-          STAMP=$(date -u +%F)
-          python3 scripts/push_supabase.py "data/radar_${STAMP}.json"
+        run: python3 scripts/push_supabase.py "data/radar_$(date -u +%F).json"
 
-      - name: Publicar em #rfp-agent
-        env:
-          SLACK_BOT_TOKEN:  ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
-          PORTAL_BASE_URL:  ${{ vars.PORTAL_BASE_URL }}
-        run: |
-          STAMP=$(date -u +%F)
-          python3 scripts/slack_post.py "data/saved_${STAMP}.json" --stats "data/stats_${STAMP}.json"
+      - name: Keep the batch stats for the digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: radar-stats
+          path: data/stats_*.json
+          retention-days: 7
