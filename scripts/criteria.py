@@ -36,9 +36,12 @@ KW_STRONG = [  # on their own, these indicate the product
     "zugprüfmaschine", "universalprüfmaschine", "werkstoffprüfmaschine",
     "materialprüfmaschine", "zugversuch", "zugprüfung", "biegeprüfung",
     "reißfestigkeit", "zugfestigkeit", "prüfmaschine",
-    # EN
+    # EN (incl. US phrasing: "test machine/system", load frame, brands)
     "tensile test", "tensile testing", "universal testing machine",
-    "materials testing machine", "material testing machine", "flexural test",
+    "universal test machine", "universal test system", "universal testing system",
+    "materials testing machine", "material testing machine", "materials test system",
+    "tensile tester", "tensile test machine", "flexural test", "flexural testing",
+    "load frame", "servo-hydraulic test", "servohydraulic test",
     "tear strength", "tensile strength", "elongation at break",
     # FR / ES / PT / IT
     "machine d'essai de traction", "essai de traction",
@@ -56,6 +59,9 @@ KW_SUPPORT = [  # reinforce a match, never qualify on their own
     "prüfkörper", "dehnung", "kunststoff", "elastomer", "polymer",
     "gummi", "rubber", "plastics", "plásticos", "automated", "automatisiert",
     "roboter", "robotic", "autosampler",
+    # US market vocabulary — brands, components, phrasing
+    "instron", "mts systems", "bluehill", "crosshead", "test frame",
+    "tensile", "flexural", "grips", "klbf",
 ]
 
 # --- LAYER 3: exclusions (outside the LabsCubed technical envelope) -------

@@ -11,14 +11,14 @@ import json, os, sys, datetime, pathlib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 os.chdir(ROOT)
-import fetch_de, fetch_ted
+import fetch_de, fetch_ted, fetch_sam
 
 
 def main(days=3):
     today = datetime.date.today()
     rows = []
     stats = {"days": days, "scanned": 0, "scanned_de": 0, "scanned_ted": 0,
-             "by_cpv": 0, "by_fulltext": 0}
+             "scanned_sam": 0, "by_cpv": 0, "by_fulltext": 0}
 
     # --- Germany: one monthly export per month the window touches -------
     # One request instead of one per day. The export refuses connections from
@@ -48,8 +48,18 @@ def main(days=3):
     except Exception as e:
         print(f"  TED: FAILED ({e})", file=sys.stderr)
 
-    stats["scanned"] = stats["scanned_de"] + stats["scanned_ted"]
-    stats["by_cpv"] = sum(1 for r in rows if r.get("found_by", "cpv") == "cpv")
+    # --- US / SAM.gov (keyless public API) ----------------------------
+    try:
+        r, tot = fetch_sam.run(days)
+        rows += r; stats["scanned_sam"] = tot
+        print(f"  SAM {days}d: {tot} notices scanned -> {len(r)} qualified",
+              file=sys.stderr)
+    except Exception as e:
+        print(f"  SAM: FAILED ({e})", file=sys.stderr)
+        stats.setdefault("source_errors", []).append(f"SAM: {e}")
+
+    stats["scanned"] = stats["scanned_de"] + stats["scanned_ted"] + stats.get("scanned_sam", 0)
+    stats["by_cpv"] = sum(1 for r in rows if r.get("found_by", "cpv") in ("cpv", "psc"))
     stats["by_fulltext"] = sum(1 for r in rows if r.get("found_by") == "fulltext")
     rows.sort(key=lambda r: (-r["score"], r.get("deadline") or "9999"))
 

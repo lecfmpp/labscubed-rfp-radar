@@ -106,12 +106,76 @@ def from_de_single(nid):
     }
 
 
+SAM_UA = {"User-Agent": UA["User-Agent"], "Accept": "application/json, text/plain, */*"}
+
+
+def _sam_json(url):
+    return json.loads(urllib.request.urlopen(urllib.request.Request(url, headers=SAM_UA), timeout=60).read())
+
+
+def from_sam(nid):
+    """Free structured record for a SAM.gov opportunity (keyless detail API)."""
+    d = _sam_json(f"https://sam.gov/api/prod/opps/v2/opportunities/{nid}")
+    d2 = d.get("data2") or {}
+    dd = d.get("description")
+    body = str((dd[0] if isinstance(dd, list) and dd else {}).get("body") or "")
+    desc = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip()
+    deadline = (((d2.get("solicitation") or {}).get("deadlines") or {}).get("response") or "")[:10]
+    poc = d2.get("pointOfContact") or []
+    email = next((p.get("email") for p in poc if isinstance(p, dict) and p.get("email")), None)
+    return {
+        "id": nid, "source": "US/SAM", "title": d2.get("title") or "",
+        "desc": desc[:6000], "buyer": None, "country": "USA",
+        "deadline": deadline or None, "deadline_time": None,
+        "cpv": [], "value": None, "contact_email": email,
+        "url": f"https://sam.gov/opp/{nid}/view",
+        "docs": [f"https://sam.gov/api/prod/opps/v3/opportunities/{nid}/resources"],
+    }
+
+
 def load_record(row):
     """Free structured record for a DB row, dispatched by source."""
+    src = (row.get("source") or "")
     nid = str(row["notice_id"])
+    if src.startswith("US/SAM"):
+        return from_sam(nid)
     if re.fullmatch(r"\d+-\d{4}", nid):           # TED publication number
         return dossier.from_ted(nid)
     return from_de_single(nid)
+
+
+def sam_attachments(nid):
+    """PDF attachments for a SAM opportunity. Listing is keyless; DOWNLOAD needs a
+    free api.data.gov key (SAM_API_KEY) and skips access-controlled files."""
+    key = os.environ.get("SAM_API_KEY", "").strip()
+    try:
+        lst = _sam_json(f"https://sam.gov/api/prod/opps/v3/opportunities/{nid}/resources")
+    except Exception as e:
+        return [], f"could not list attachments ({e})"
+    atts = []
+    for grp in (lst.get("_embedded", {}).get("opportunityAttachmentList") or []):
+        atts += grp.get("attachments") or []
+    pdfs = [a for a in atts if a.get("fileExists") == "1" and str(a.get("mimeType") or "").lower() == ".pdf"]
+    if not pdfs:
+        return [], "no PDF attachments on this notice"
+    controlled = sum(1 for a in pdfs if a.get("accessLevel") != "public")
+    public = [a for a in pdfs if a.get("accessLevel") == "public"]
+    if not key:
+        return [], f"{len(pdfs)} PDF attachment(s) — set a free SAM_API_KEY to fetch ({controlled} access-controlled)"
+    files = []
+    for a in public:
+        rid = a.get("resourceId")
+        url = f"https://api.sam.gov/prod/opportunities/v1/resources/files/{rid}/download?api_key={key}"
+        try:
+            b = urllib.request.urlopen(urllib.request.Request(url, headers=SAM_UA), timeout=120).read()
+            if b[:4] == b"%PDF":
+                files.append((a.get("name") or (rid + ".pdf"), b, "application/pdf"))
+        except Exception:
+            pass
+    note = f"downloaded {len(files)} public PDF(s)"
+    if controlled:
+        note += f"; {controlled} access-controlled (request access on sam.gov)"
+    return files, note
 
 
 # --------------------------------------------------------------------------
@@ -272,10 +336,11 @@ def enrich_one(row, write=True):
     if rec.get("contact_email") and not row.get("contact_email"):
         patch["contact_email"] = rec["contact_email"]
 
+    is_sam = (row.get("source") or "").startswith("US/SAM")
     saved_docs, note = [], None
-    if fetch_docs and doc_url and not row.get("docs_fetched"):
+    if not row.get("docs_fetched") and (is_sam or (fetch_docs and doc_url)):
         try:
-            files, note = fetch_docs.fetch(doc_url)
+            files, note = sam_attachments(str(row["notice_id"])) if is_sam else fetch_docs.fetch(doc_url)
             for name, blob, mime in files:
                 # Push the bytes to Storage so the portal can preview the file;
                 # keep the row even if the upload fails (metadata still useful).
