@@ -185,8 +185,9 @@ MAT_NO = ["concrete", "beton", "asphalt", "cement", "zement", "steel", "stahl", 
 TEST_OK = ["tensile", "zug", "traction", "tração", "flexur", "biege", "tear", "reiß", "weiterreiß", "elongation", "dehnung"]
 TEST_NO = ["hardness", "härte", "durometer", "rockwell", "vickers", "brinell", "impact", "charpy",
            "kerbschlag", "izod", "fatigue", "ermüdung", "creep", "kriech"]
-STANDARDS = ["astm d638", "astm d412", "astm d624", "astm d790", "astm d882",
-             "iso 527", "iso 37", "iso 34", "iso 178"]
+STANDARDS = ["astm d638", "astm d882", "astm d1708", "astm d412", "astm d624",
+             "iso 527", "iso 37", "iso 34", "jis k7161", "jis k7127", "jis k6251", "jis k6252"]
+STANDARDS_FLEX = ["astm d790", "iso 178", "jis k7171"]   # secondary (CubeFlex in dev)
 ELIG = [("Annual turnover", ["turnover", "umsatz", "chiffre d'affaires"]),
         ("ISO 9001 / quality cert", ["iso 9001", "qualitätsmanagement", "quality management"]),
         ("Reference projects", ["reference", "referenz", "referenzen", "référence"]),
@@ -230,26 +231,35 @@ def build_matrix(rec):
         rows.append({"requirement": "Material", "notice_says": "not stated in the notice",
                      "fit": "[NEEDS HUMAN] confirm from the spec documents"})
 
-    # Test type ------------------------------------------------------------
-    ok = [k for k in TEST_OK if k in text]; no = [k for k in TEST_NO if k in text]
-    if no and not ok:
+    # Test type — tensile/tear primary; flexure is secondary (CubeFlex in dev) --
+    tensile_ok = [k for k in TEST_OK if k != "flexur" and k != "biege" and k in text]
+    flex_only = (not tensile_ok) and ("flexur" in text or "biege" in text or "bending" in text)
+    no = [k for k in TEST_NO if k in text]
+    if no and not (tensile_ok or flex_only):
         rows.append({"requirement": "Test type", "notice_says": ", ".join(no[:3]),
-                     "fit": "[GAP] unsupported test type (we do tensile / flexure / tear)"})
+                     "fit": "[GAP] unsupported test type (we do tensile / tear)"})
         hard_no.append(f"test type: {no[0]}")
-    elif ok:
-        rows.append({"requirement": "Test type", "notice_says": ", ".join(ok[:3]),
-                     "fit": "✓ tensile / flexure / tear — supported"})
+    elif tensile_ok:
+        rows.append({"requirement": "Test type", "notice_says": ", ".join(tensile_ok[:3]),
+                     "fit": "✓ tensile / tear — supported"})
+    elif flex_only:
+        rows.append({"requirement": "Test type", "notice_says": "flexure / bending",
+                     "fit": "[NEEDS HUMAN] flexure only — CubeFlex still in development"})
     else:
         rows.append({"requirement": "Test type", "notice_says": "not stated in the notice",
                      "fit": "[NEEDS HUMAN] confirm from the spec documents"})
 
-    # Standards ------------------------------------------------------------
+    # Standards — primary (tensile/tear) vs secondary (flexure) ---------------
     hit = [s for s in STANDARDS if s in text]
+    flex = [s for s in STANDARDS_FLEX if s in text]
     if hit:
         rows.append({"requirement": "Standards", "notice_says": ", ".join(s.upper() for s in hit[:4]),
-                     "fit": "✓ standards LabsCubed instruments are built to"})
+                     "fit": "✓ tensile/tear standards LabsCubed builds to"})
+    elif flex:
+        rows.append({"requirement": "Standards", "notice_says": ", ".join(s.upper() for s in flex[:3]),
+                     "fit": "[NEEDS HUMAN] flexure standard — CubeFlex still in development"})
     else:
-        others = re.findall(r"\b(?:astm|iso|din|en)\s?\d{2,4}\b", text)
+        others = re.findall(r"\b(?:astm|iso|din|en|jis)\s?[a-z]?\d{2,4}\b", text)
         rows.append({"requirement": "Standards",
                      "notice_says": ", ".join(sorted(set(o.upper() for o in others))[:4]) or "none cited",
                      "fit": "[NEEDS HUMAN] assess any standard not in our core set" if others else "— none cited in the notice"})

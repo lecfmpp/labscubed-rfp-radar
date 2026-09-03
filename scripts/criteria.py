@@ -32,15 +32,17 @@ CPV_BROAD = {
 
 # --- LAYER 2: multilingual keywords ---------------------------------------
 KW_STRONG = [  # on their own, these indicate the product
+    # Primary = TENSILE + tear (rubber/plastic), the products we ship today.
+    # Flexure (CubeFlex) is still in development, so it lives in KW_SUPPORT only.
     # DE
     "zugprüfmaschine", "universalprüfmaschine", "werkstoffprüfmaschine",
-    "materialprüfmaschine", "zugversuch", "zugprüfung", "biegeprüfung",
+    "materialprüfmaschine", "zugversuch", "zugprüfung",
     "reißfestigkeit", "zugfestigkeit", "prüfmaschine",
     # EN (incl. US phrasing: "test machine/system", load frame, brands)
     "tensile test", "tensile testing", "universal testing machine",
     "universal test machine", "universal test system", "universal testing system",
     "materials testing machine", "material testing machine", "materials test system",
-    "tensile tester", "tensile test machine", "flexural test", "flexural testing",
+    "tensile tester", "tensile test machine",
     "load frame", "servo-hydraulic test", "servohydraulic test",
     "tear strength", "tensile strength", "elongation at break",
     # FR / ES / PT / IT
@@ -49,9 +51,17 @@ KW_STRONG = [  # on their own, these indicate the product
     "máquina de ensaio de tração", "macchina di prova a trazione",
 ]
 KW_NORMS = [  # standards are the strongest, least ambiguous signal
-    "astm d638", "astm d412", "astm d624", "astm d790", "astm d882",
-    "iso 527", "iso 37", "iso 34", "iso 178", "din en iso 527", "din en iso 178",
+    # PRIMARY — tensile & tear for rubber and plastics, across ASTM / ISO / JIS.
+    # Naming one of these (e.g. ASTM D412) is the ICP's strongest buying signal.
+    # plastics tensile
+    "astm d638", "astm d882", "astm d1708", "iso 527", "jis k7161", "jis k7162", "jis k7127",
+    "din en iso 527",
+    # rubber / elastomer tensile + tear
+    "astm d412", "astm d624", "iso 37", "iso 34", "jis k6251", "jis k6252",
 ]
+# SECONDARY — flexure standards (CubeFlex still in development). Kept as support,
+# so a flexure-only notice reinforces but never qualifies on its own.
+KW_NORMS_FLEX = ["astm d790", "iso 178", "jis k7171", "din en iso 178"]
 KW_SUPPORT = [  # reinforce a match, never qualify on their own
     "extensometer", "extensômetro", "extensomètre", "probenwechsler",
     "specimen", "probekörper", "éprouvette", "probeta",
@@ -59,10 +69,14 @@ KW_SUPPORT = [  # reinforce a match, never qualify on their own
     "prüfkörper", "dehnung", "kunststoff", "elastomer", "polymer",
     "gummi", "rubber", "plastics", "plásticos", "automated", "automatisiert",
     "roboter", "robotic", "autosampler",
+    # ICP materials — rubber, plastics AND composites are the target industries
+    "composite", "composites", "film", "kautschuk", "borracha", "caucho",
     # US market vocabulary — brands, components, phrasing
     "instron", "mts systems", "bluehill", "crosshead", "test frame",
-    "tensile", "flexural", "grips", "klbf",
-]
+    "tensile", "grips", "klbf",
+    # SECONDARY flexure signals (CubeFlex in development) — reinforce only
+    "flexural", "flexure", "bending test", "biegeprüfung", "biegeversuch", "flexão",
+] + KW_NORMS_FLEX
 
 # --- LAYER 3: exclusions (outside the LabsCubed technical envelope) -------
 KW_NEGATIVE = [

@@ -44,9 +44,11 @@ def call(query, page=1, limit=100):
             time.sleep(2 ** attempt)
 
 FT_TERMS = ["universal testing machine", "tensile testing machine", "tensile test",
-            "materials testing machine", "Zugprüfmaschine", "Universalprüfmaschine",
-            "Materialprüfmaschine", "Werkstoffprüfmaschine", "flexural testing",
-            "tear strength", "machine d'essai de traction", "ensayo de tracción"]
+            "materials testing machine", "tensile tester", "load frame",
+            "servo-hydraulic test", "Zugprüfmaschine", "Universalprüfmaschine",
+            "Materialprüfmaschine", "Werkstoffprüfmaschine",
+            "tear strength", "machine d'essai de traction", "ensayo de tracción",
+            "flexural testing"]   # flexure kept for discovery; scored as secondary
 
 def q_fulltext(days=7):
     """Second pass: catches what the CPV filter misses (mis-assigned CPV).
