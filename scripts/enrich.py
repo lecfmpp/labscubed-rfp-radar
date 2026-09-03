@@ -21,7 +21,7 @@ push_supabase.py; also runnable alone:
    python3 scripts/enrich.py <notice-id>      # one tender, dry-run print
    python3 scripts/enrich.py --batch 2026-09-03 [--limit 12] [--write]
 """
-import os, re, sys, json, datetime, urllib.request, urllib.error, pathlib
+import os, re, sys, json, datetime, urllib.request, urllib.error, urllib.parse, pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -34,6 +34,22 @@ except Exception:
 URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 UA  = {"User-Agent": "LabsCubed-RFP-Radar/1.0 (leandro@labscubed.com)"}
+
+
+STORAGE_BUCKET = "portal-assets"   # same private bucket the portal Files page uses
+
+
+def storage_upload(rfp_id, name, blob, mime):
+    """Upload a downloaded document into Storage; the portal signs a URL to
+    preview it. Path: rfp/<rfp_id>/<safe-name>. Returns the storage path."""
+    safe = re.sub(r"[^\w.\-]", "_", name)[:120] or "document"
+    path = f"rfp/{rfp_id}/{safe}"
+    endpoint = f"{URL}/storage/v1/object/{STORAGE_BUCKET}/{urllib.parse.quote(path)}"
+    req = urllib.request.Request(endpoint, data=blob, method="POST",
+        headers={"apikey": KEY, "Authorization": f"Bearer {KEY}",
+                 "Content-Type": mime or "application/octet-stream", "x-upsert": "true"})
+    urllib.request.urlopen(req, timeout=180).read()
+    return path
 
 
 def rest(method, path, payload=None, prefer=None):
@@ -257,12 +273,19 @@ def enrich_one(row, write=True):
         patch["contact_email"] = rec["contact_email"]
 
     saved_docs, note = [], None
-    if fetch_docs and doc_url:
+    if fetch_docs and doc_url and not row.get("docs_fetched"):
         try:
             files, note = fetch_docs.fetch(doc_url)
             for name, blob, mime in files:
+                # Push the bytes to Storage so the portal can preview the file;
+                # keep the row even if the upload fails (metadata still useful).
+                sp = None
+                try:
+                    sp = storage_upload(row["id"], name, blob, mime)
+                except Exception as e:
+                    print(f"  storage upload failed ({name}): {e}", file=sys.stderr)
                 saved_docs.append({"rfp_id": row["id"], "filename": re.sub(r"[^\w.\- ]", "_", name)[:120],
-                                   "url": doc_url, "mime": mime, "bytes": len(blob)})
+                                   "url": doc_url, "mime": mime, "bytes": len(blob), "storage_path": sp})
         except Exception as e:
             note = f"failed — {e}"
     if note:
@@ -279,7 +302,7 @@ def enrich_one(row, write=True):
 
 def enrich_batch(day=None, limit=15, write=True):
     day = day or datetime.date.today().isoformat()
-    q = (f"rfps?select=id,notice_id,source,document_url,deadline,published,deadline_time,contact_email"
+    q = (f"rfps?select=id,notice_id,source,document_url,deadline,published,deadline_time,contact_email,docs_fetched"
          f"&batch_date=eq.{day}&tier=in.(HOT,WARM)&requirement_matrix=is.null"
          f"&order=score.desc&limit={limit}")
     rows = rest("GET", q)
@@ -302,7 +325,7 @@ if __name__ == "__main__":
         print(json.dumps(res, indent=2, ensure_ascii=False))
     elif len(sys.argv) > 1:
         # single notice, dry-run print (no --write flag needed to inspect)
-        rows = rest("GET", f"rfps?select=id,notice_id,source,document_url,deadline,published,deadline_time,contact_email&notice_id=eq.{sys.argv[1]}")
+        rows = rest("GET", f"rfps?select=id,notice_id,source,document_url,deadline,published,deadline_time,contact_email,docs_fetched&notice_id=eq.{sys.argv[1]}")
         if not rows:
             raise SystemExit(f"notice {sys.argv[1]} not in rfps")
         print(json.dumps(enrich_one(rows[0], write="--write" in sys.argv), indent=2, ensure_ascii=False))
