@@ -21,7 +21,7 @@ push_supabase.py; also runnable alone:
    python3 scripts/enrich.py <notice-id>      # one tender, dry-run print
    python3 scripts/enrich.py --batch 2026-09-03 [--limit 12] [--write]
 """
-import os, re, sys, json, datetime, urllib.request, urllib.error, urllib.parse, pathlib
+import os, re, sys, json, base64, datetime, urllib.request, urllib.error, urllib.parse, pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -188,6 +188,83 @@ TEST_NO = ["hardness", "härte", "durometer", "rockwell", "vickers", "brinell", 
 STANDARDS = ["astm d638", "astm d882", "astm d1708", "astm d412", "astm d624",
              "iso 527", "iso 37", "iso 34", "jis k7161", "jis k7127", "jis k6251", "jis k6252"]
 STANDARDS_FLEX = ["astm d790", "iso 178", "jis k7171"]   # secondary (CubeFlex in dev)
+
+
+# --------------------------------------------------------------------------
+# AI analysis of the tender documents (Claude reads the PDFs directly). Optional:
+# only runs when ANTHROPIC_API_KEY is set. stdlib-only (raw HTTP), so it stays
+# inside the dependency-free Action.
+# --------------------------------------------------------------------------
+ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+AI_MODEL = os.environ.get("RFP_AI_MODEL", "claude-opus-5")
+AI_EFFORT = os.environ.get("RFP_AI_EFFORT", "low")
+
+AI_PROMPT = """You are analysing the attached tender document(s) for LabsCubed, a maker of benchtop materials TESTING MACHINES:
+- CubeTen: tensile, rigid plastics, up to 10 kN (ASTM D638 / ISO 527 / JIS K7161)
+- CubeOne: tensile + tear, rubber & elastomers, 1 kN (ASTM D412 / ISO 37 / JIS K6251)
+- CubeFlex: flexure (ASTM D790 / ISO 178) — STILL IN DEVELOPMENT, so treat flexure as secondary
+- plus a cloud Portal + AI Suite. Target industries: rubber, plastics, composites.
+
+Read the document(s) and extract the concrete requirements a sales + technical team must evaluate to decide whether to bid. Cover, only when actually present: required machine / force capacity (in kN), materials, test types, cited standards, specimen types & throughput, software, certifications (e.g. ISO 9001), eligibility (turnover, references, insurance), delivery / deadline, and whether it is a service or sole-source award rather than an equipment purchase.
+
+Return ONLY a JSON object, no prose, no markdown:
+{"verdict":"<one line: is this within LabsCubed's envelope? call out any hard gap — force > 10 kN, metal/concrete/hardness/impact/fatigue, service-only, or sole-source>",
+ "requirements":[
+   {"requirement":"<short label>",
+    "detail":"<what the document actually requires, plain language>",
+    "quote":"<a SHORT phrase copied VERBATIM from the document (<= 12 words) that states this requirement>",
+    "doc":"<the document file name this came from>",
+    "fit":"<start with ✓ if we clearly meet it, [GAP] if outside our envelope, or [NEEDS HUMAN] if it cannot be judged from the text>"}
+ ]}
+Rules: every "quote" MUST be copied character-for-character from the document (never paraphrase) so it can be found by exact text search. Never claim compliance the document does not support — use [NEEDS HUMAN]. Aim for 6–12 requirements."""
+
+
+def ai_requirements(pdfs):
+    """pdfs: [(filename, bytes)]. Returns (matrix, verdict) or None."""
+    if not ANTHROPIC_KEY or not pdfs:
+        return None
+    content, total = [], 0
+    for name, blob in pdfs[:4]:
+        if blob[:4] != b"%PDF" or len(blob) > 20_000_000:
+            continue
+        total += len(blob)
+        if total > 24_000_000:
+            break
+        content.append({"type": "document", "title": name,
+                        "source": {"type": "base64", "media_type": "application/pdf",
+                                   "data": base64.b64encode(blob).decode()}})
+    if not content:
+        return None
+    content.append({"type": "text", "text": AI_PROMPT})
+    body = json.dumps({"model": AI_MODEL, "max_tokens": 8000,
+                       "output_config": {"effort": AI_EFFORT},
+                       "messages": [{"role": "user", "content": content}]}).encode()
+    req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=body,
+        headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"})
+    try:
+        resp = json.loads(urllib.request.urlopen(req, timeout=240).read())
+    except Exception as e:
+        print(f"  AI extraction failed: {e}", file=sys.stderr)
+        return None
+    if resp.get("stop_reason") == "refusal":
+        print("  AI extraction refused", file=sys.stderr)
+        return None
+    txt = "".join(b.get("text", "") for b in (resp.get("content") or []) if b.get("type") == "text")
+    m = re.search(r"\{[\s\S]*\}", txt)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+    except Exception:
+        return None
+    reqs = data.get("requirements") or []
+    if not reqs:
+        return None
+    matrix = [{"requirement": (r.get("requirement") or "—"), "detail": (r.get("detail") or ""),
+               "quote": (r.get("quote") or ""), "doc": (r.get("doc") or ""), "fit": (r.get("fit") or "")}
+              for r in reqs[:20] if isinstance(r, dict)]
+    verdict = data.get("verdict") or "AI-analysed the tender documents"
+    return (matrix, verdict) if matrix else None
 ELIG = [("Annual turnover", ["turnover", "umsatz", "chiffre d'affaires"]),
         ("ISO 9001 / quality cert", ["iso 9001", "qualitätsmanagement", "quality management"]),
         ("Reference projects", ["reference", "referenz", "referenzen", "référence"]),
@@ -344,7 +421,7 @@ def enrich_one(row, write=True):
         patch["contact_email"] = rec["contact_email"]
 
     is_sam = (row.get("source") or "").startswith("US/SAM")
-    saved_docs, note = [], None
+    saved_docs, note, pdf_blobs = [], None, []
     if not row.get("docs_fetched") and (is_sam or (fetch_docs and doc_url)):
         try:
             files, note = sam_attachments(str(row["notice_id"])) if is_sam else fetch_docs.fetch(doc_url)
@@ -356,10 +433,24 @@ def enrich_one(row, write=True):
                     sp = storage_upload(row["id"], name, blob, mime)
                 except Exception as e:
                     print(f"  storage upload failed ({name}): {e}", file=sys.stderr)
-                saved_docs.append({"rfp_id": row["id"], "filename": re.sub(r"[^\w.\- ]", "_", name)[:120],
+                fname = re.sub(r"[^\w.\- ]", "_", name)[:120]
+                saved_docs.append({"rfp_id": row["id"], "filename": fname,
                                    "url": doc_url, "mime": mime, "bytes": len(blob), "storage_path": sp})
+                if blob[:4] == b"%PDF":
+                    pdf_blobs.append((fname, blob))
         except Exception as e:
             note = f"failed — {e}"
+
+    # AI analysis of the actual documents. When an ANTHROPIC_API_KEY is set, read
+    # the downloaded PDFs with Claude and extract the REAL requirements + a verbatim
+    # quote for each (so the portal highlights the exact passage) — this replaces
+    # the notice-text keyword screen. Falls back to the deterministic matrix if the
+    # key is missing, no PDF was downloadable, or the call fails.
+    ai = ai_requirements(pdf_blobs)
+    if ai:
+        patch["requirement_matrix"], patch["summary"] = ai
+        note = (note + "; " if note else "") + f"{len(ai[0])} requirements extracted by AI from the documents"
+
     if note:
         patch["docs_fetched"] = bool(saved_docs)
         patch["docs_fetch_note"] = note
@@ -368,6 +459,9 @@ def enrich_one(row, write=True):
         rest("PATCH", f"rfps?id=eq.{row['id']}", patch, prefer="return=minimal")
         if saved_docs:
             rest("POST", "rfp_documents", saved_docs, prefer="return=minimal")
+    if ai:
+        return {"id": row["id"], "notice_id": row["notice_id"], "verdict": ai[1],
+                "rows": len(ai[0]), "docs": len(saved_docs), "note": note, "ai": True}
     return {"id": row["id"], "notice_id": row["notice_id"], "verdict": verdict,
             "rows": len(matrix), "docs": len(saved_docs), "note": note}
 
