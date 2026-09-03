@@ -145,9 +145,9 @@ def load_record(row):
 
 
 def sam_attachments(nid):
-    """PDF attachments for a SAM opportunity. Listing is keyless; DOWNLOAD needs a
-    free api.data.gov key (SAM_API_KEY) and skips access-controlled files."""
-    key = os.environ.get("SAM_API_KEY", "").strip()
+    """PDF attachments for a SAM opportunity. Both the listing AND the download of
+    PUBLIC files are keyless via the sam.gov SPA endpoint (api.sam.gov needs a key
+    and 404s here). Access-controlled files stay behind sam.gov account access."""
     try:
         lst = _sam_json(f"https://sam.gov/api/prod/opps/v3/opportunities/{nid}/resources")
     except Exception as e:
@@ -159,13 +159,10 @@ def sam_attachments(nid):
     if not pdfs:
         return [], "no PDF attachments on this notice"
     controlled = sum(1 for a in pdfs if a.get("accessLevel") != "public")
-    public = [a for a in pdfs if a.get("accessLevel") == "public"]
-    if not key:
-        return [], f"{len(pdfs)} PDF attachment(s) — set a free SAM_API_KEY to fetch ({controlled} access-controlled)"
     files = []
-    for a in public:
+    for a in [x for x in pdfs if x.get("accessLevel") == "public"]:
         rid = a.get("resourceId")
-        url = f"https://api.sam.gov/prod/opportunities/v1/resources/files/{rid}/download?api_key={key}"
+        url = f"https://sam.gov/api/prod/opps/v3/opportunities/resources/files/{rid}/download"
         try:
             b = urllib.request.urlopen(urllib.request.Request(url, headers=SAM_UA), timeout=120).read()
             if b[:4] == b"%PDF":
