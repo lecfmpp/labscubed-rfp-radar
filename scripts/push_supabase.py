@@ -108,6 +108,19 @@ def main(path):
     print(f"[supabase] {len(rows)} upserted, {len(fresh)} new, {dq} disqualified")
     json.dump(saved, open(ROOT / "data" / f"saved_{batch}.json", "w"),
               ensure_ascii=False, indent=1)
+
+    # Deterministic, free enrichment of the WARM/HOT tenders just written:
+    # pulls each notice's structured record, screens it against the LabsCubed
+    # envelope into a requirement_matrix + bid/no-bid verdict, and best-effort
+    # downloads the tender documents. Stdlib only — no extra dependency, no
+    # workflow change. Best-effort: a failure here never fails the scan write.
+    try:
+        import enrich
+        enriched = enrich.enrich_batch(batch, limit=15, write=True)
+        print(f"[enrich] {len(enriched)} tenders screened")
+    except Exception as e:
+        print(f"[enrich] skipped: {e}", file=sys.stderr)
+
     return saved
 
 if __name__ == "__main__":
